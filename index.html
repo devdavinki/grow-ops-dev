@@ -1371,6 +1371,14 @@ function renderRooms(){
           ${ecr?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ecr.color}"></span><span style="color:var(--text3)">${ecr.name} EC ${ecr.ecMin}–${ecr.ecMax}</span></span>`:''}
         </div>`;
       }
+    } else if(stage==='veg'){
+      const vegPhase=MAXX_PHASES.find(p=>p.id==='VEG');
+      if(vegPhase){
+        phaseHTML=`<div style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:5px 8px;background:var(--blue-bg);border:1px solid var(--blue-dim);border-radius:var(--r);font-size:10px;flex-wrap:wrap">
+          <span style="font-family:var(--mono);font-weight:700;color:var(--blue)">${vegPhase.name}</span>
+          <span style="color:var(--text3)">💡 ${vegPhase.light}% · CO₂ ${vegPhase.co2} · Day ${vegPhase.dayTemp}°/Night ${vegPhase.nightTemp}° · Day RH ${vegPhase.rh}%/Night ${vegPhase.nightRH}%</span>
+        </div>`;
+      }
     }
 
     // flip nudge
@@ -4050,6 +4058,8 @@ function renderChores(){
 // nightRH = separate night RH target; vpdMin/Max = VPD range; vwcMin/Max = substrate moisture range
 // subECMin/Max = substrate EC range; dryback = target dryback %; shotNote = irrigation guidance
 const MAXX_PHASES=[
+  // Vegetative phase — used for unflipped rooms
+  {id:'VEG', name:'Vegetative', start:null, end:null, light:50, co2:900, dayTemp:83, nightTemp:79, rh:70, nightRH:75, ecMin:null, ecMax:null, vpdMin:null, vpdMax:null, vwcMin:null, vwcMax:null, subECMin:null, subECMax:null, dryback:null, shotNote:'Veg phase. Maintain canopy, prep for flip.'},
   {id:'F1', name:'F1 Foundation',   start:1,  end:4,  light:70, co2:900,  dayTemp:78, nightTemp:74, rh:78, nightRH:76, ecMin:1.9, ecMax:2.0, vpdMin:0.8, vpdMax:1.1, vwcMin:65, vwcMax:80, subECMin:2.5, subECMax:3.5, dryback:5,  shotNote:'Small frequent shots. Build root zone.'},
   {id:'F2', name:'F2 Foundation',   start:5,  end:9,  light:80, co2:1050, dayTemp:80, nightTemp:74, rh:75, nightRH:74, ecMin:2.0, ecMax:2.1, vpdMin:0.9, vpdMax:1.2, vwcMin:65, vwcMax:78, subECMin:2.5, subECMax:3.5, dryback:6,  shotNote:'Maintain moisture. 4-6 shots/day. Watch for stretch.'},
   {id:'F3', name:'F3 Foundation',   start:10, end:14, light:90, co2:1150, dayTemp:80, nightTemp:74, rh:73, nightRH:73, ecMin:2.1, ecMax:2.3, vpdMin:1.0, vpdMax:1.3, vwcMin:63, vwcMax:75, subECMin:2.8, subECMax:3.8, dryback:7,  shotNote:'Begin structured dryback. First shot 1-2h after lights on.'},
@@ -5350,7 +5360,8 @@ function openRoomModal(room) {
     console.log('['+roomName+'] _soil (compressed, UUIDs at index 5):', gl._soil.map(s=>({sId:s[5], vwc:s[0], mapped:s[5]?!!SENSOR_POSITION_MAP[s[5]]:false})));
   }
   const fd = typeof flowerDay==='function' ? flowerDay(room) : null;
-  const phase = fd&&fd>=1 ? getPhaseForDay(fd) : null;
+  const _roomStage = typeof getStage==='function' ? getStage(room) : null;
+  const phase = fd&&fd>=1 ? getPhaseForDay(fd) : (_roomStage==='veg' ? MAXX_PHASES.find(p=>p.id==='VEG') : null);
   const ecr   = fd&&fd>=1 ? getECRainbow(fd)   : null;
 
   document.getElementById('rdm-name').textContent = roomName;
@@ -5969,7 +5980,74 @@ function renderBlueprintPhases(){
   if(!grid) return;
   grid.innerHTML = '';
 
-  MAXX_PHASES.forEach(phase => {
+  // ── Veg phase card first ──
+  const _vegPhase = MAXX_PHASES.find(p=>p.id==='VEG');
+  if(_vegPhase){
+    const _vov = alertThresholds['VEG'] || {};
+    const _vTemp = _vov.temp || {t2:4, t1:8};
+    const _vRH   = _vov.rh   || {t2:8, t1:15};
+    const _vCO2  = _vov.co2  || {t2:150, t1:300};
+    const _vCard = document.createElement('div');
+    _vCard.className = 'card';
+    _vCard.style.cssText = 'border-left:3px solid var(--blue);margin-bottom:4px';
+    function _vThreshRow(label, paramKey, t2, t1, step, unit){
+      return `<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--text2)">${label}</div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <span style="font-size:10px;color:var(--amber);white-space:nowrap">🟡 ±</span>
+          <input type="number" value="${t2}" step="${step}" min="0"
+            style="width:56px;font-size:12px;padding:3px 6px;border-radius:var(--r);border:1px solid var(--amber-dim);background:var(--amber-bg);color:var(--amber);font-family:var(--mono);text-align:center"
+            onchange="setBlueprintThresh('VEG','${paramKey}','t2',parseFloat(this.value));showBlueprint_status()"/>
+          <span style="font-size:10px;color:var(--text3)">${unit}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <span style="font-size:10px;color:var(--red);white-space:nowrap">🔴 ±</span>
+          <input type="number" value="${t1}" step="${step}" min="0"
+            style="width:56px;font-size:12px;padding:3px 6px;border-radius:var(--r);border:1px solid var(--red-dim);background:var(--red-bg);color:var(--red);font-family:var(--mono);text-align:center"
+            onchange="setBlueprintThresh('VEG','${paramKey}','t1',parseFloat(this.value));showBlueprint_status()"/>
+          <span style="font-size:10px;color:var(--text3)">${unit}</span>
+        </div>
+      </div>`;
+    }
+    _vCard.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:15px;font-weight:700;color:var(--text)">Vegetative</span>
+            <span style="font-family:var(--mono);font-size:11px;padding:2px 8px;background:var(--blue-bg);border:1px solid var(--blue-dim);border-radius:var(--r);color:var(--blue)">Pre-flip</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);margin-top:5px;line-height:1.4;font-style:italic">Maintain canopy, prep for flip.</div>
+        </div>
+        <span style="font-size:10px;padding:2px 7px;background:var(--blue-bg);border:1px solid var(--blue-dim);border-radius:var(--r);color:var(--blue);font-family:var(--mono)">💡 ${_vegPhase.light}%</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:5px;margin-bottom:12px">
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">Temp Day</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.dayTemp}°F</div></div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">Temp Night</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.nightTemp}°F</div></div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">RH Day</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.rh}%</div></div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">RH Night</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.nightRH}%</div></div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">CO₂</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.co2} ppm</div></div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px;text-align:center"><div style="font-size:9px;color:var(--text3);margin-bottom:2px">Light</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${_vegPhase.light}%</div></div>
+      </div>
+      <div style="margin-top:4px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between">
+          <span>Alert spreads from setpoint</span>
+          <span style="font-weight:400;color:var(--text3)">🟡 amber (log) &nbsp; 🔴 red (Slack)</span>
+        </div>
+        ${_vThreshRow('Temp', 'temp', _vTemp.t2, _vTemp.t1, 0.5, '°F')}
+        ${_vThreshRow('RH Day', 'rh', _vRH.t2, _vRH.t1, 1, '%')}
+        ${_vThreshRow('CO₂', 'co2', _vCO2.t2, _vCO2.t1, 25, 'ppm')}
+        <div style="margin-top:6px;font-size:10px;color:var(--text3)">Setpoints: Temp ${_vegPhase.dayTemp}°F day / ${_vegPhase.nightTemp}°F night · RH ${_vegPhase.rh}% day / ${_vegPhase.nightRH}% night · CO₂ ${_vegPhase.co2} ppm</div>
+      </div>
+    `;
+    grid.appendChild(_vCard);
+  }
+  // ── Separator ──
+  const _sep = document.createElement('div');
+  _sep.style.cssText = 'font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);padding:10px 0 6px';
+  _sep.textContent = 'Flower phases';
+  grid.appendChild(_sep);
+
+  MAXX_PHASES.filter(p=>p.id!=='VEG').forEach(phase => {
     const ov = alertThresholds[phase.id] || {};
     const tTemp = ov.temp || PHASE_THRESHOLD_DEFAULTS.temp;
     const tRH   = ov.rh   || PHASE_THRESHOLD_DEFAULTS.rh;
@@ -6182,6 +6260,23 @@ function showBlueprint_status(msg){
 function getGuardrailsForPhase(phaseId){
   const p = MAXX_PHASES.find(x=>x.id===phaseId);
   if(!p) return null;
+  // Veg phase — no EC rainbow, no VPD/VWC targets, simpler guardrails
+  if(phaseId==='VEG'){
+    const ov = getThresholdsForPhase('VEG');
+    const gl = getGlobalThresholds();
+    const tTemp = ov.temp || {t2:4, t1:8};
+    const tRH   = ov.rh   || {t2:8, t1:15};
+    const tCO2  = ov.co2  || {t2:150, t1:300};
+    return {
+      temp: { setpoint:p.dayTemp, t2Low:p.dayTemp-tTemp.t2, t2High:p.dayTemp+tTemp.t2, t1Low:p.dayTemp-tTemp.t1, t1High:p.dayTemp+tTemp.t1 },
+      rh:   { setpoint:p.rh,      t2Low:p.rh-tRH.t2,        t2High:p.rh+tRH.t2,        t1Low:p.rh-tRH.t1,        t1High:p.rh+tRH.t1 },
+      co2:  { setpoint:p.co2,     t2Low:p.co2-tCO2.t2,      t2High:p.co2+tCO2.t2,      t1Low:p.co2-tCO2.t1,      t1High:p.co2+tCO2.t1 },
+      vpd: null, vwc: null,
+      soilEC:       { t1High: gl.soilEC?.t1  || 10 },
+      soilMoisture: { t1Low:  gl.soilMoisture?.t1 || 10 },
+      dewPoint:     { t1Low: gl.dewPoint?.t1 || 3 },
+    };
+  }
   const ov = getThresholdsForPhase(phaseId);
   const gl = getGlobalThresholds();
   const tTemp = ov.temp || PHASE_THRESHOLD_DEFAULTS.temp;
@@ -6281,7 +6376,8 @@ function runGuardrails(){
     if(age > 20*60*1000) return;
 
     const fd = flowerDay(room);
-    const phase = fd ? getPhaseForDay(fd) : null;
+    const _rStage = getStage(room);
+    const phase = fd ? getPhaseForDay(fd) : (_rStage==='veg' ? MAXX_PHASES.find(p=>p.id==='VEG') : null);
     if(!phase) return;
 
     const issues = evaluateRoom(room.name, gl, phase.id);
