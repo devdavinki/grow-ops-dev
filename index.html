@@ -703,7 +703,13 @@ button { cursor: pointer; }
           <div class="section-title">Morning attention list</div>
           <div style="font-size:12px;color:var(--text3);margin-top:2px">Probes with highest overnight dryback — check and water in order. Tap to mark done.</div>
         </div>
-        <button onclick="renderMorningAttention()" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">↻ Refresh</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--text3)">Sort:</span>
+          <button id="morning-sort-dryback" onclick="setMorningSort('dryback')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-weight:600">Dryback ↓</button>
+          <button id="morning-sort-vwc" onclick="setMorningSort('vwc')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">VWC ↑</button>
+          <button id="morning-sort-ec" onclick="setMorningSort('ec')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">EC ↓</button>
+          <button onclick="renderMorningAttention()" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">↻</button>
+        </div>
       </div>
       <div id="morning-attention-list"></div>
     </div>
@@ -2373,6 +2379,25 @@ async function loadChecks(){
 
 // ══════════════════════════════════════════════
 // MORNING ATTENTION LIST
+let morningSortMode = 'dryback'; // 'dryback' | 'vwc' | 'ec'
+
+function setMorningSort(mode){
+  morningSortMode = mode;
+  // Update button styles
+  ['dryback','vwc','ec'].forEach(m => {
+    const btn = document.getElementById('morning-sort-' + m);
+    if(!btn) return;
+    const active = m === mode;
+    btn.style.border = active ? '1px solid var(--blue)' : '1px solid var(--border2)';
+    btn.style.background = active ? 'var(--blue-bg)' : 'none';
+    btn.style.color = active ? 'var(--blue)' : 'var(--text3)';
+    btn.style.fontWeight = active ? '600' : '400';
+    const labels = {dryback:'Dryback ↓', vwc:'VWC ↑', ec:'EC ↓'};
+    btn.textContent = labels[m];
+  });
+  renderMorningAttention();
+}
+
 // Reads live Growlink dryback from all flower rooms,
 // sorts by highest overnight dryback, shows as a task list.
 // Completions stored in localStorage keyed by today's date.
@@ -2423,12 +2448,27 @@ function renderMorningAttention(){
     return;
   }
 
-  // Sort by dryback descending (driest first), nulls last
+  // Sort based on morningSortMode
   probes.sort((a,b) => {
-    if(a.dryback == null && b.dryback == null) return 0;
-    if(a.dryback == null) return 1;
-    if(b.dryback == null) return -1;
-    return b.dryback - a.dryback;
+    if(morningSortMode === 'vwc') {
+      // Lowest VWC first (driest), nulls last
+      if(a.vwc == null && b.vwc == null) return 0;
+      if(a.vwc == null) return 1;
+      if(b.vwc == null) return -1;
+      return a.vwc - b.vwc;
+    } else if(morningSortMode === 'ec') {
+      // Highest EC first (needs dilution), nulls last
+      if(a.ec == null && b.ec == null) return 0;
+      if(a.ec == null) return 1;
+      if(b.ec == null) return -1;
+      return b.ec - a.ec;
+    } else {
+      // Default: highest dryback first, nulls last
+      if(a.dryback == null && b.dryback == null) return 0;
+      if(a.dryback == null) return 1;
+      if(b.dryback == null) return -1;
+      return b.dryback - a.dryback;
+    }
   });
 
   // Load today's completions
@@ -4042,6 +4082,9 @@ let metrcHarvestPriority=L(METRC_KEYS.harvestPriority,{});
 // Keyed by Growlink room name, populated by pullGrowlinkFromCloud()
 let growlinkData = L('wg_growlink_rooms', {});
 let dryRooms = L('wg_dry_rooms', {'Dry Room 1':{note:'',order:[],takedowns:{}},'Dry Room 2':{note:'',order:[],takedowns:{}}});
+// Permanent approved takedowns — keyed "dryKey|roomTag|harvestDate"
+// Survives METRC re-uploads; once approved the harvest never reappears on the dry room card
+let approvedTakedowns = L('wg_approved_takedowns', {});
 // Clear any runoff sheet links accidentally saved in dry room notes
 if(dryRooms['Dry Room 2']?.note && dryRooms['Dry Room 2'].note.includes('http')){
   dryRooms['Dry Room 2'].note='';
@@ -4835,12 +4878,18 @@ function approveDryTakedown(dryKey, roomTag){
   td.approved=true;
   td.approvedBy=who;
   td.approvedAt=fmtTime();
-  // Remove room from order list so it disappears from the card
+  // Remove room from order list
   if(dryRooms[dryKey]?.order){
     dryRooms[dryKey].order=dryRooms[dryKey].order.filter(t=>t!==roomTag);
   }
-  // Keep takedown record as approved — used to suppress re-show of takedown button
-  // (already removed from order list above)
+  // Permanently record this approval so it survives METRC re-uploads
+  // Key includes harvest date so a future harvest from the same room isn't blocked
+  const _batchesForApproval = getDryRoomBatches(dryKey);
+  const _matchedGroup = _batchesForApproval.find(b => (b.roomTag||'') === roomTag);
+  const _harvestDate = _matchedGroup ? (_matchedGroup.harvestDate||'unknown') : 'unknown';
+  const _permKey = dryKey + '|' + roomTag + '|' + _harvestDate;
+  approvedTakedowns[_permKey] = {approvedBy:who, approvedAt:fmtTime(), date:dateToIso(TODAY)};
+  S('wg_approved_takedowns', approvedTakedowns);
   S('wg_dry_rooms',dryRooms);
   pushConfigToCloud(true);
   // Log to sheet
@@ -4893,7 +4942,11 @@ function getDryRoomBatches(dryKey){
     seen[batch].plants += plants;
   });
 
-  return Object.values(seen);
+  // Filter out permanently approved takedowns so they never reappear after METRC re-upload
+  return Object.values(seen).filter(b => {
+    const permKey = dryKey + '|' + (b.roomTag||'') + '|' + (b.harvestDate||'unknown');
+    return !approvedTakedowns[permKey];
+  });
 }
 
 function renderSupportRooms(){
