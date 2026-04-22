@@ -1396,7 +1396,15 @@ function renderRooms(){
         if(overrides['done_'+dt.id]||overrides['skip_'+dt.id]) continue;
         const dotCls=dt.type==='hardstop'?'dot-red':dt.type==='phase3'?'dot-amber':dt.type==='phase2'?'dot-orange':'dot-green';
         const winBar=dt.pct!==undefined?`<div class="win-bar"><div class="win-fill" style="width:${dt.pct}%;background:${dt.pct>=85?'var(--red)':dt.pct>=60?'var(--amber)':'var(--green)'}"></div></div>`:'';
-        taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${dt.label}${dt.daysLeft!==undefined?`<span class="sub">${dt.daysLeft===0?'<span class="alert-txt">Last day</span>':dt.daysLeft+' days remaining'}</span>`:''}${winBar}</div></div>`);
+        const _phaseDetail = {
+          phase1: 'Remove dead/damaged lowers + weak interior shoots only. No fan leaves. No structural decisions.',
+          phase2: 'Remove bottom 25–40% (confirm % with Lead), interior non-light sites, larf, fan leaves blocking productive tops.',
+          phase3: 'Surgical only — missed larf, tiny lowers with no stacking potential, isolated shade leaves on a productive top. No large fan leaves.',
+          hardstop: 'No canopy work after today without Cultivation Director approval + deviation log.',
+          light: 'Light cleanup — obvious blockers and dying material only. No aggressive pulls.',
+          preharvest: 'Final tidy pass for harvest crew access.',
+        }[dt.type] || '';
+        taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${dt.label}<span class="sub">${_phaseDetail}</span>${dt.daysLeft!==undefined?`<span class="sub" style="margin-top:2px">${dt.daysLeft===0?'<span class="alert-txt">Last day</span>':dt.daysLeft+' days remaining'}</span>`:''}${winBar}</div></div>`);
       }
     }
     // lead and fertigator see additive
