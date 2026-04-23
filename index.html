@@ -5408,6 +5408,7 @@ function parseTableSensors(rawSensors, tableCount) {
 }
 
 function openRoomModal(room) {
+  console.log('[Score] openRoomModal called — currentRole:', currentRole, '| loggedInMember:', loggedInMember&&loggedInMember.name);
   const roomName = room.name || room.key;
   const gl = growlinkData[roomName] || getGrowlinkForRoom(roomName);
   // Debug: log raw sensor UUIDs for this room to console
