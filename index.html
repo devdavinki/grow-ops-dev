@@ -5551,46 +5551,117 @@ function openRoomModal(room) {
   const tableCount=[1,6,9].includes(roomNum)?2:3;
   const tables=(!_isSupportRoom&&raw.length)?parseTableSensors(raw,tableCount):null;
 
-  // Load GL_ProbeMetrics for this room — keyed by roomId + probe position
-  const _roomIdForMetrics = room.id || (roomName.match(/\d+/)||[''])[0] && ('r'+(roomName.match(/\d+/)||[''])[0]);
-  const _cachedMetrics = L('wg_probe_metrics',{});
-  let _probeMetrics = _cachedMetrics[_roomIdForMetrics] || null;
+  // Load GL_ProbeMetrics for this room — keyed by room id (r1, r2 etc)
+  const _roomNum = (roomName.match(/\d+/)||[])[0];
+  const _roomIdForMetrics = room.id || (_roomNum ? 'r'+_roomNum : null);
+  console.log('[ProbeMetrics] room id for metrics:', _roomIdForMetrics);
 
-  // Fetch fresh probe metrics if gsUrl available (non-blocking)
+  // Parse probe metrics rows into a per-room per-probe map
+  function _parseProbeMetrics(rows){
+    if(!rows||rows.length<2) return {};
+    const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
+    const col = n => hdr.indexOf(n);
+    const today = new Date().toISOString().split('T')[0];
+    const pm = {};
+    rows.slice(1).forEach(row=>{
+      const d = String(row[col('date')]||'').split('T')[0];
+      if(d!==today) return;
+      const rid = String(row[col('room_id')]||'');
+      const pos = String(row[col('probe')]||''); // e.g. T1F, T1B, T2F etc
+      if(!rid||!pos) return;
+      if(!pm[rid]) pm[rid]={};
+      pm[rid][pos]={
+        dayPeakVwc:  row[col('day_peak_vwc')],
+        dayPeakTime: row[col('day_peak_time')],
+        dayLowVwc:   row[col('day_low_vwc')],
+        dayLowTime:  row[col('day_low_time')],
+        overnightDb: row[col('overnight_dryback_pct')],
+        avgBetween:  row[col('avg_between_event_dryback')],
+        eventCount:  row[col('irrigation_event_count')],
+      };
+    });
+    return pm;
+  }
+
+  // Use cached metrics first for instant display
+  const _cachedMetrics = L('wg_probe_metrics_raw',null);
+  let _probeMetrics = null;
+  if(_cachedMetrics){
+    const pm = _parseProbeMetrics(_cachedMetrics);
+    _probeMetrics = pm[_roomIdForMetrics] || null;
+    console.log('[ProbeMetrics] from cache — keys:', _probeMetrics ? Object.keys(_probeMetrics) : 'none');
+  }
+
+  // Always fetch fresh — re-renders substrate section when data arrives
   if(gsUrl){
     fetch(gsUrl+'?action=getProbeMetrics&t='+Date.now())
       .then(r=>r.json())
       .then(json=>{
-        if(!json.ok||!json.rows||json.rows.length<2) return;
-        const hdr = json.rows[0].map(h=>String(h).toLowerCase().trim());
-        const col = n => hdr.indexOf(n);
-        const today = new Date().toISOString().split('T')[0];
-        const pm = {};
-        json.rows.slice(1).forEach(row=>{
-          const d = String(row[col('date')]||'').split('T')[0];
-          if(d!==today) return;
-          const rid = String(row[col('room_id')]||'');
-          const pos = String(row[col('probe')]||'');
-          if(!pm[rid]) pm[rid]={};
-          pm[rid][pos]={
-            dayPeakVwc:  row[col('day_peak_vwc')],
-            dayPeakTime: row[col('day_peak_time')],
-            dayLowVwc:   row[col('day_low_vwc')],
-            dayLowTime:  row[col('day_low_time')],
-            overnightDb: row[col('overnight_dryback_pct')],
-            avgBetween:  row[col('avg_between_event_dryback')],
-            eventCount:  row[col('irrigation_event_count')],
-          };
-        });
-        // Cache and re-render substrate section if modal still open
-        const allMetrics = L('wg_probe_metrics',{});
-        Object.assign(allMetrics, pm);
-        S('wg_probe_metrics', allMetrics);
+        if(!json.ok||!json.rows) {
+          console.log('[ProbeMetrics] fetch failed:', json.error||'no data');
+          return;
+        }
+        console.log('[ProbeMetrics] fetched', json.rows.length, 'rows');
+        // Cache raw rows
+        S('wg_probe_metrics_raw', json.rows);
+        const pm = _parseProbeMetrics(json.rows);
+        console.log('[ProbeMetrics] rooms in data:', Object.keys(pm));
         _probeMetrics = pm[_roomIdForMetrics] || null;
-        // Re-render substrate section with new data
+        console.log('[ProbeMetrics] probes for', _roomIdForMetrics, ':', _probeMetrics ? Object.keys(_probeMetrics) : 'none');
+        // Re-render the substrate section with fresh data
         const _subEl2 = document.getElementById('rdm-substrate-section');
-        if(_subEl2 && _probeMetrics) _subEl2.dataset.metrics = JSON.stringify(_probeMetrics);
-      }).catch(()=>{});
+        if(_subEl2 && _subEl2.innerHTML && _probeMetrics){
+          // Trigger a substrate re-render by re-calling openRoomModal logic for substrate only
+          // Find all probe cards and inject metrics directly
+          _subEl2.querySelectorAll('[data-probe-key]').forEach(el=>{
+            const key = el.dataset.probeKey;
+            const pm2 = _probeMetrics[key];
+            if(!pm2) return;
+            const metricsEl = el.querySelector('.probe-metrics-section');
+            if(metricsEl) metricsEl.innerHTML = _buildProbeMetricsHtml(pm2);
+          });
+        }
+      }).catch(e=>{ console.log('[ProbeMetrics] fetch error:', e); });
+  }
+
+  // Build metrics HTML block for a probe — called both on initial render and on re-render
+  function _buildProbeMetricsHtml(pm){
+    if(!pm) return '';
+    const _ovDb  = (pm.overnightDb  !== '' && pm.overnightDb  != null) ? parseFloat(pm.overnightDb)  : null;
+    const _avgBt = (pm.avgBetween   !== '' && pm.avgBetween   != null) ? parseFloat(pm.avgBetween)   : null;
+    const _pkVwc = (pm.dayPeakVwc   !== '' && pm.dayPeakVwc   != null) ? parseFloat(pm.dayPeakVwc)   : null;
+    const _loVwc = (pm.dayLowVwc    !== '' && pm.dayLowVwc    != null) ? parseFloat(pm.dayLowVwc)    : null;
+    const _evCt  = (pm.eventCount   !== '' && pm.eventCount   != null) ? parseInt(pm.eventCount)     : null;
+    const _ovCol  = _ovDb!=null  ? (_ovDb>15?'var(--red)':_ovDb<8?'var(--amber)':'var(--green)') : 'var(--text3)';
+    const _avgCol = _avgBt!=null ? (_avgBt>15?'var(--red)':_avgBt<3?'var(--amber)':'var(--green)') : 'var(--text3)';
+    if(_pkVwc===null && _loVwc===null && _ovDb===null && _avgBt===null) return '';
+    let h = '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:5px">Dryback metrics · today</div>';
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">';
+    if(_pkVwc!==null){
+      h += '<div><div style="font-size:8px;color:var(--text3)">Day peak</div>';
+      h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">'+_pkVwc.toFixed(1)+'%</div>';
+      if(pm.dayPeakTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.dayPeakTime+'</div>';
+      h += '</div>';
+    }
+    if(_loVwc!==null){
+      h += '<div><div style="font-size:8px;color:var(--text3)">Day low</div>';
+      h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">'+_loVwc.toFixed(1)+'%</div>';
+      if(pm.dayLowTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.dayLowTime+'</div>';
+      h += '</div>';
+    }
+    if(_ovDb!==null){
+      const _ovHint = _ovDb<8 ? 'too wet — −1 event' : _ovDb>15 ? 'too dry — +1 event' : '10–14% ✓';
+      h += '<div><div style="font-size:8px;color:var(--text3)">Overnight DB</div>';
+      h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_ovCol+'">'+_ovDb.toFixed(1)+'%</div>';
+      h += '<div style="font-size:8px;color:var(--text3)">'+_ovHint+'</div></div>';
+    }
+    if(_avgBt!==null){
+      const _label = 'Avg bet. shots' + (_evCt!==null ? ' ('+_evCt+')' : '');
+      h += '<div><div style="font-size:8px;color:var(--text3)">'+_label+'</div>';
+      h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_avgCol+'">'+_avgBt.toFixed(1)+'%</div></div>';
+    }
+    h += '</div>';
+    return h;
   }
 
   function probeCard(data,posLabel,side,tNum){
@@ -5602,16 +5673,7 @@ function openRoomModal(room) {
     // Per-probe metrics from GL_ProbeMetrics — keyed by T1F, T1B, T2F etc
     const _probeKey = 'T' + (tNum||'1') + (posLabel==='Front'?'F':'B');
     const _pm = _probeMetrics ? _probeMetrics[_probeKey] : null;
-    const _ovDb = _pm&&_pm.overnightDb!==''?parseFloat(_pm.overnightDb):null;
-    const _avgBt = _pm&&_pm.avgBetween!==''?parseFloat(_pm.avgBetween):null;
-    const _pkVwc = _pm&&_pm.dayPeakVwc!==''?parseFloat(_pm.dayPeakVwc):null;
-    const _loVwc = _pm&&_pm.dayLowVwc!==''?parseFloat(_pm.dayLowVwc):null;
-    const _loTime = _pm?_pm.dayLowTime:'';
-    const _pkTime = _pm?_pm.dayPeakTime:'';
-    const _evCt = _pm&&_pm.eventCount!==''?parseInt(_pm.eventCount):null;
-    const _ovCol = _ovDb!=null?(_ovDb>20?'var(--red)':_ovDb>8?'var(--amber)':'var(--green)'):'var(--text3)';
-    const _avgCol = _avgBt!=null?(_avgBt>20?'var(--red)':_avgBt>8?'var(--amber)':'var(--green)'):'var(--text3)';
-    return `<div style="flex:1;padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)">
+    return `<div data-probe-key="${_probeKey}" style="flex:1;padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)">
       <div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between">
         <span style="color:var(--text2)">${posLabel}</span><span>${side}</span>
       </div>
@@ -5639,29 +5701,7 @@ function openRoomModal(room) {
           <div style="font-family:var(--mono);font-size:13px;color:var(--text2)">${fmt(data.temp)}°<span style="font-size:9px;color:var(--text3)">F</span></div>
         </div>
       </div>
-      ${_pm?`<div style="background:var(--bg2);border-radius:var(--r);padding:6px 8px;border:1px solid var(--border)">
-        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:5px">Dryback metrics · today</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-          ${_pkVwc!=null?`<div>
-            <div style="font-size:8px;color:var(--text3)">Day peak</div>
-            <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">${_pkVwc.toFixed(1)}%</div>
-            ${_pkTime?`<div style="font-size:8px;color:var(--text3)">${_pkTime}</div>`:''}
-          </div>`:''}
-          ${_loVwc!=null?`<div>
-            <div style="font-size:8px;color:var(--text3)">Day low</div>
-            <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">${_loVwc.toFixed(1)}%</div>
-            ${_loTime?`<div style="font-size:8px;color:var(--text3)">${_loTime}</div>`:''}
-          </div>`:''}
-          ${_ovDb!=null?`<div>
-            <div style="font-size:8px;color:var(--text3)">Overnight DB</div>
-            <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:${_ovCol}">${_ovDb.toFixed(1)}%</div>
-          </div>`:''}
-          ${_avgBt!=null?`<div>
-            <div style="font-size:8px;color:var(--text3)">Avg bet. shots${_evCt!=null?' ('+_evCt+')':''}</div>
-            <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:${_avgCol}">${_avgBt.toFixed(1)}%</div>
-          </div>`:''}
-        </div>
-      </div>`:''}
+      <div class="probe-metrics-section" style="${_pm?'background:var(--bg2);border-radius:var(--r);padding:6px 8px;border:1px solid var(--border)':'display:none'}">${_pm?_buildProbeMetricsHtml(_pm):''}</div>
     </div>`;}
 
   if (tables) {
