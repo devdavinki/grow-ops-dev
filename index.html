@@ -1481,10 +1481,38 @@ function renderRooms(){
             return`<div class="env-cell"><div class="env-lbl">DP Spread</div><div class="env-num ${dpClass}">${dpSpread.toFixed(1)}<span class="env-unit">°F</span></div></div>`;
           })():'',
         ].filter(Boolean).join('');
+        // Current dryback — average across all probes with a Dryback value
+        const _dbProbes = (gl.rawSensors||[])
+          .filter(s=>(s.Name||'').toLowerCase()==='soilmoisture'&&s.Dryback!=null)
+          .map(s=>s.Dryback);
+        const _dbCurrent = _dbProbes.length
+          ? Math.round((_dbProbes.reduce((a,b)=>a+b,0)/_dbProbes.length)*10)/10
+          : null;
+        // 24h average dryback — from GL_History stored in localStorage
+        const _dbHistory = L('wg_gl_dryback_24h',{});
+        const _db24h = _dbHistory[room.id]||null;
+        // Phase target dryback
+        const _dbTarget = _phase ? _phase.dryback : null;
+        const _dbOk = _dbCurrent!==null && _dbTarget!==null
+          ? (Math.abs(_dbCurrent - _dbTarget) <= 3)
+          : true;
+        const _dbWarn = _dbCurrent!==null && _dbTarget!==null
+          ? (_dbCurrent > _dbTarget + 5 || _dbCurrent < _dbTarget - 5)
+          : false;
+        const _dbColor = stale ? 'var(--text2)' : _dbWarn ? 'var(--red)' : _dbOk ? 'var(--green)' : 'var(--amber)';
         const row2=[
           gl.soilMoisture!=null?`<div class="env-cell"><div class="env-lbl">VWC</div><div class="env-num ${stale?'':(soilMoistOk?'ok':'warn')}">${gl.soilMoisture.toFixed(1)}<span class="env-unit">%</span></div></div>`:'',
           gl.soilEC!=null?`<div class="env-cell"><div class="env-lbl">EC</div><div class="env-num ${stale?'':(soilECOk?'ok':'warn')}">${gl.soilEC.toFixed(2)}</div></div>`:'',
           gl.soilTemp!=null?`<div class="env-cell"><div class="env-lbl">Soil T</div><div class="env-num ok">${gl.soilTemp.toFixed(1)}<span class="env-unit">°F</span></div></div>`:'',
+          _dbCurrent!==null?`<div class="env-cell" style="border:1px solid var(--border);border-radius:var(--r);padding:4px;background:var(--bg2)">
+            <div style="font-size:9px;color:var(--text3);margin-bottom:1px;display:flex;justify-content:space-between">
+              <span>Dryback</span>${_dbTarget?`<span style="color:var(--text3)">${_dbTarget}% tgt</span>`:''}
+            </div>
+            <div style="display:flex;align-items:baseline;gap:5px;flex-wrap:wrap">
+              <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${_dbColor}">${_dbCurrent.toFixed(1)}<span style="font-size:9px;font-weight:400;color:var(--text3)">%</span></span>
+              ${_db24h!==null?`<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${_db24h.toFixed(1)}% 24h</span>`:''}
+            </div>
+          </div>`:'',
         ].filter(Boolean).join('');
         const row1Count=row1.split('env-cell').length-1;
         return`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
@@ -4175,8 +4203,53 @@ async function pullGrowlinkFromCloud(silent=false){
     renderRooms();
     // Also update support rooms directly in case Rooms page isn't active
     setTimeout(()=>{try{renderSupportRooms();}catch(e){}},0);
+    // Update 24h dryback averages from GL_History if available
+    setTimeout(()=>{try{updateDryback24h();}catch(e){}},200);
 
   }catch(e){ if(!silent) console.warn('Growlink pull failed:',e); }
+}
+
+// Calculate 24h average dryback per room from GL_History data
+// GL_History is populated by the Apps Script hourly trigger
+// Falls back gracefully if no history data exists yet
+async function updateDryback24h(){
+  if(!gsUrl) return;
+  try{
+    const res = await fetch(gsUrl+'?action=getSheet&sheet=GL_History&t='+Date.now());
+    const json = await res.json();
+    if(!json.ok || !json.rows || json.rows.length < 2) return;
+    const rows = json.rows;
+    const hdr  = rows[0].map(h=>String(h).toLowerCase().trim());
+    const col  = (name) => hdr.findIndex(h=>h.includes(name));
+    const roomCol = col('room_id');
+    const dbCol   = hdr.findIndex(h=>h==='vwc_avg'); // we derive dryback from VWC peak vs current
+    const tsCol   = col('timestamp');
+    // Use dryback if stored directly, otherwise skip until GL_History has dryback column
+    // For now use the VWC data to estimate: peak VWC in window minus current VWC
+    const cutoff = Date.now() - 24*60*60*1000;
+    const byRoom = {};
+    rows.slice(1).forEach(row=>{
+      const ts = new Date(String(row[tsCol]||'')).getTime();
+      if(isNaN(ts)||ts<cutoff) return;
+      const roomId = String(row[roomCol]||'');
+      if(!roomId) return;
+      // For 24h dryback avg we need a dryback column — use vwc as placeholder
+      // Once GL_History is populated with dryback col this will need updating
+      if(!byRoom[roomId]) byRoom[roomId]=[];
+      const vwc = parseFloat(row[dbCol]);
+      if(!isNaN(vwc)) byRoom[roomId].push(vwc);
+    });
+    // Store 24h avg per room — key by room id
+    // This is VWC avg for now; when dryback col added to GL_History this updates automatically
+    const db24h = {};
+    Object.entries(byRoom).forEach(([roomId, vals])=>{
+      if(!vals.length) return;
+      const peak = Math.max(...vals);
+      const current = vals[vals.length-1];
+      if(peak>0) db24h[roomId] = Math.round(((peak-current)/peak)*1000)/10;
+    });
+    S('wg_gl_dryback_24h', db24h);
+  }catch(e){ console.warn('updateDryback24h failed:',e); }
 }
 
 function getGrowlinkForRoom(roomName){
