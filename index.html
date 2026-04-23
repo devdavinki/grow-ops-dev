@@ -5631,7 +5631,7 @@ function openRoomModal(room) {
   document.getElementById('room-detail-bg').style.display='block';
 }
 
-function renderRoomScoreSection(el, sc, roomId){
+function renderRoomScoreSection(el, sc, roomId, expanded){
   if(!el) return;
   const stateBandColor = s => s&&s.includes('ELITE')?'var(--green)':s&&s.includes('STRONG')?'var(--green)':s&&s.includes('STABLE')?'var(--blue)':s&&s.includes('WATCH')?'var(--amber)':'var(--red)';
   const barColor = v => v>=80?'var(--green)':v>=60?'var(--blue)':v>=40?'var(--amber)':'var(--red)';
@@ -5728,9 +5728,41 @@ function renderRoomScoreSection(el, sc, roomId){
 
   const breakdown = buildBreakdown(sc);
 
+  // Collapsed view — just the two scores, click to expand
+  const _sensorColor = stateBandColor(sc.sensorState);
+  const _combinedColor = stateBandColor(sc.combinedState);
+  const _topIssues = breakdown.filter(i=>i.sev==='issue'||i.sev==='critical').map(i=>i.headline);
+  const _issueHint = _topIssues.length ? _topIssues.slice(0,2).join(' · ') : (breakdown.filter(i=>i.sev==='watch').length ? breakdown.filter(i=>i.sev==='watch')[0].headline : 'All metrics on target');
+
+  if(!expanded){
+    el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;cursor:pointer" onclick="renderRoomScoreSection(document.getElementById('rdm-score-section'),${JSON.stringify(sc).replace(/</g,'\u003c')},'${roomId}',true)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px">Performance Score · Day ${sc.cycleDay} · ${sc.phase}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px">${_issueHint}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--text3);margin-bottom:2px">Sensor</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${_sensorColor};line-height:1">${sc.sensorScore}</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:9px;color:var(--text3);margin-bottom:2px">Combined</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${_combinedColor};line-height:1">${sc.combinedScore}</div>
+          </div>
+          <div style="font-size:16px;color:var(--text3)">›</div>
+        </div>
+      </div>
+    </div>`;
+    return;
+  }
+
   el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3)">Performance Score · Day ${sc.cycleDay} · ${sc.phase}</div>
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="renderRoomScoreSection(document.getElementById('rdm-score-section'),${JSON.stringify(sc).replace(/</g,'\u003c')},'${roomId}',false)">
+        <div style="font-size:16px;color:var(--text3)">‹</div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3)">Performance Score · Day ${sc.cycleDay} · ${sc.phase}</div>
+      </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span style="font-size:10px;color:var(--text3)">Confidence: ${sc.confidence}% <span style="color:var(--text2)">${sc.confidenceTier}</span></span>
         <button onclick="refreshRoomScore('${roomId}')" style="font-size:10px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">↻</button>
