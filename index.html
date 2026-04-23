@@ -5444,7 +5444,7 @@ function openRoomModal(room) {
     const _sc = _cachedScores[_roomId];
     if(_sc && _sc.vpdScore!=null){
       // Cache has full score data — render immediately
-      renderRoomScoreSection(scoreEl, _sc, _roomId);
+      renderRoomScoreSection(scoreEl, _sc, _roomId, false);
     } else {
       scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">Loading score…</div>`;
     }
@@ -5457,7 +5457,7 @@ function openRoomModal(room) {
           if(json.ok&&json.data){
             S('wg_perf_scores',json.data);
             const sc=json.data[_roomId];
-            if(sc) renderRoomScoreSection(scoreEl,sc,_roomId);
+            if(sc) renderRoomScoreSection(scoreEl,sc,_roomId,false);
             else scoreEl.innerHTML=`<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for ${_roomId} — run calculateDailyScores() in Apps Script editor to generate.</div>`;
           } else {
             // Keep cached display if fetch fails, show warning
@@ -5633,6 +5633,7 @@ function openRoomModal(room) {
 
 function renderRoomScoreSection(el, sc, roomId, expanded){
   if(!el) return;
+  expanded = expanded === true; // default collapsed
   const stateBandColor = s => s&&s.includes('ELITE')?'var(--green)':s&&s.includes('STRONG')?'var(--green)':s&&s.includes('STABLE')?'var(--blue)':s&&s.includes('WATCH')?'var(--amber)':'var(--red)';
   const barColor = v => v>=80?'var(--green)':v>=60?'var(--blue)':v>=40?'var(--amber)':'var(--red)';
 
@@ -5841,7 +5842,7 @@ async function refreshRoomScore(roomId){
       S('wg_perf_scores',json.data);
       const sc=json.data[roomId];
       console.log('[Score] room score for '+roomId+':', sc);
-      if(sc&&scoreEl) renderRoomScoreSection(scoreEl,sc,roomId);
+      if(sc&&scoreEl) renderRoomScoreSection(scoreEl,sc,roomId,false);
       else if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for '+roomId+' — run calculateDailyScores() in Apps Script to generate scores.</div>';
     } else {
       const _errMsg=json.error||'Score fetch failed';
