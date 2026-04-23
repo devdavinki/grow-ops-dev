@@ -1481,38 +1481,10 @@ function renderRooms(){
             return`<div class="env-cell"><div class="env-lbl">DP Spread</div><div class="env-num ${dpClass}">${dpSpread.toFixed(1)}<span class="env-unit">°F</span></div></div>`;
           })():'',
         ].filter(Boolean).join('');
-        // Current dryback — average across all probes with a Dryback value
-        const _dbProbes = (gl.rawSensors||[])
-          .filter(s=>(s.Name||'').toLowerCase()==='soilmoisture'&&s.Dryback!=null)
-          .map(s=>s.Dryback);
-        const _dbCurrent = _dbProbes.length
-          ? Math.round((_dbProbes.reduce((a,b)=>a+b,0)/_dbProbes.length)*10)/10
-          : null;
-        // 24h average dryback — from GL_History stored in localStorage
-        const _dbHistory = L('wg_gl_dryback_24h',{});
-        const _db24h = _dbHistory[room.id]||null;
-        // Phase target dryback
-        const _dbTarget = _phase ? _phase.dryback : null;
-        const _dbOk = _dbCurrent!==null && _dbTarget!==null
-          ? (Math.abs(_dbCurrent - _dbTarget) <= 3)
-          : true;
-        const _dbWarn = _dbCurrent!==null && _dbTarget!==null
-          ? (_dbCurrent > _dbTarget + 5 || _dbCurrent < _dbTarget - 5)
-          : false;
-        const _dbColor = stale ? 'var(--text2)' : _dbWarn ? 'var(--red)' : _dbOk ? 'var(--green)' : 'var(--amber)';
         const row2=[
           gl.soilMoisture!=null?`<div class="env-cell"><div class="env-lbl">VWC</div><div class="env-num ${stale?'':(soilMoistOk?'ok':'warn')}">${gl.soilMoisture.toFixed(1)}<span class="env-unit">%</span></div></div>`:'',
           gl.soilEC!=null?`<div class="env-cell"><div class="env-lbl">EC</div><div class="env-num ${stale?'':(soilECOk?'ok':'warn')}">${gl.soilEC.toFixed(2)}</div></div>`:'',
           gl.soilTemp!=null?`<div class="env-cell"><div class="env-lbl">Soil T</div><div class="env-num ok">${gl.soilTemp.toFixed(1)}<span class="env-unit">°F</span></div></div>`:'',
-          _dbCurrent!==null?`<div class="env-cell" style="border:1px solid var(--border);border-radius:var(--r);padding:4px;background:var(--bg2)">
-            <div style="font-size:9px;color:var(--text3);margin-bottom:1px;display:flex;justify-content:space-between">
-              <span>Dryback</span>${_dbTarget?`<span style="color:var(--text3)">${_dbTarget}% tgt</span>`:''}
-            </div>
-            <div style="display:flex;align-items:baseline;gap:5px;flex-wrap:wrap">
-              <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${_dbColor}">${_dbCurrent.toFixed(1)}<span style="font-size:9px;font-weight:400;color:var(--text3)">%</span></span>
-              ${_db24h!==null?`<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${_db24h.toFixed(1)}% 24h</span>`:''}
-            </div>
-          </div>`:'',
         ].filter(Boolean).join('');
         const row1Count=row1.split('env-cell').length-1;
         return`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
@@ -5530,11 +5502,21 @@ function openRoomModal(room) {
   const tableCount=[1,6,9].includes(roomNum)?2:3;
   const tables=(!_isSupportRoom&&raw.length)?parseTableSensors(raw,tableCount):null;
 
+  // 24h dryback averages keyed by room id — available once GL_History is running
+  const _modal24hDb = L('wg_gl_dryback_24h',{});
+  const _room24hDb  = _modal24hDb[roomName] || _modal24hDb[(()=>{
+    // Also try matching by room id (r1, r2 etc)
+    const num = (roomName.match(/\d+/)||[])[0];
+    return num ? 'r'+num : null;
+  })()] || null;
+
   function probeCard(data,posLabel,side){
     if(!data) return `<div style="flex:1;padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);opacity:0.35;text-align:center;font-size:11px;color:var(--text3)">${posLabel}<br>No data</div>`;
     const vwcCol=data.vwc!=null?sc(data.vwc,tVWC[0],tVWC[1]):'var(--text3)';
     const ecCol =data.ec!=null ?sc(data.ec, tEC[0], tEC[1]) :'var(--text3)';
     const dbCol =data.dryback!=null?(data.dryback>20?'var(--red)':data.dryback>10?'var(--amber)':'var(--green)'):'var(--text3)';
+    // Phase target dryback for this probe
+    const _phaseTgt = phase && phase.dryback!=null ? phase.dryback : null;
     return `<div style="flex:1;padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)">
       <div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between">
         <span style="color:var(--text2)">${posLabel}</span><span>${side}</span>
@@ -5546,9 +5528,11 @@ function openRoomModal(room) {
           ${data.peak!=null?`<div style="font-size:8px;color:var(--text3)">pk ${data.peak.toFixed(1)}%</div>`:''}
         </div>
         <div style="background:var(--bg2);border-radius:var(--r);padding:5px;text-align:center">
-          <div style="font-size:9px;color:var(--text3)">Dryback</div>
+          <div style="font-size:9px;color:var(--text3);display:flex;justify-content:space-between;align-items:center">
+            <span>Dryback</span>${_phaseTgt?`<span style="color:var(--text3);font-size:8px">~${_phaseTgt}%</span>`:''}
+          </div>
           <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${dbCol}">${data.dryback!=null?data.dryback.toFixed(1)+'%':'—'}</div>
-          <div style="font-size:8px;color:var(--text3)">&lt;10% ok</div>
+          ${_room24hDb!==null?`<div style="font-size:9px;color:var(--text3);font-family:var(--mono)">${_room24hDb.toFixed(1)}% 24h avg</div>`:`<div style="font-size:8px;color:var(--text3)">&lt;10% ok</div>`}
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
