@@ -5622,7 +5622,30 @@ function renderRoomScoreSection(el, sc, roomId){
   if(!el) return;
   const stateBandColor = s => s&&s.includes('ELITE')?'var(--green)':s&&s.includes('STRONG')?'var(--green)':s&&s.includes('STABLE')?'var(--blue)':s&&s.includes('WATCH')?'var(--amber)':'var(--red)';
   const barColor = v => v>=80?'var(--green)':v>=60?'var(--blue)':v>=40?'var(--amber)':'var(--red)';
-  const bar = (v,label) => v!=null?`<div style="margin-bottom:6px">
+
+  // Rule-based score explanations — no API call needed
+  const explainScore = (sc) => {
+    const notes = [];
+    // What's driving the score up
+    if(sc.vpdScore>=85) notes.push('✓ VPD well-managed');
+    if(sc.dewpointScore>=85) notes.push('✓ Dewpoint spread healthy');
+    if(sc.stabilityScore>=85) notes.push('✓ Environment stable');
+    if(sc.uptakeScore>=80) notes.push('✓ Plants feeding well');
+    if(sc.uniformityScore>=85) notes.push('✓ Even substrate distribution');
+    // What's pulling it down
+    if(sc.vpdScore!=null&&sc.vpdScore<70) notes.push('⚠ VPD off target — check HVAC/lights-on ramp');
+    if(sc.dewpointScore!=null&&sc.dewpointScore<70) notes.push('⚠ Dewpoint spread low — condensation risk');
+    if(sc.stabilityScore!=null&&sc.stabilityScore<70) notes.push('⚠ Temp/RH swinging — check controller stability');
+    if(sc.uptakeScore!=null&&sc.uptakeScore<60) notes.push('⚠ Low EC uptake — plants underperforming or overwatered');
+    if(sc.uniformityScore!=null&&sc.uniformityScore<70) notes.push('⚠ Front/back VWC gap — check dripper output');
+    if(sc.responseScore!=null&&sc.responseScore<70) notes.push('⚠ Irrigation response weak — review shot size/timing');
+    if(sc.stress&&sc.stress>10) notes.push('⚠ Stress penalty active ('+sc.stress+' pts) — check T1 alerts');
+    if(sc.confidence<70) notes.push('ℹ Low confidence — limited data, score is provisional');
+    if(!notes.length) notes.push('ℹ Score is within expected range for this phase');
+    return notes;
+  };
+
+  const bar = (v,label,explain) => v!=null?`<div style="margin-bottom:6px">
     <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px">
       <span style="color:var(--text3)">${label}</span>
       <span style="font-family:var(--mono);font-weight:600;color:${barColor(v)}">${v}</span>
@@ -5630,16 +5653,23 @@ function renderRoomScoreSection(el, sc, roomId){
     <div style="height:5px;background:var(--bg4);border-radius:3px;overflow:hidden">
       <div style="height:100%;width:${v}%;background:${barColor(v)};border-radius:2px"></div>
     </div>
+    ${explain?`<div style="font-size:9px;color:var(--text3);margin-top:2px">${explain}</div>`:''}
   </div>`:'';
 
+  // Index explanations
+  const envExplain = sc.envIndex!=null?(sc.envIndex>=80?'VPD, dewpoint and stability all on target':sc.envIndex>=60?'Some environmental variance — review sub-scores below':'Environmental conditions need attention'):'';
+  const demandExplain = sc.demandIndex!=null?(sc.demandIndex>=80?'Plants responding well to environment':sc.demandIndex>=60?'Demand signals adequate':'Low plant demand detected — check substrate'):'';
+
   const subScores = [
-    {label:'VPD', val:sc.vpdScore},
-    {label:'Dewpoint', val:sc.dewpointScore},
-    {label:'Stability', val:sc.stabilityScore},
-    {label:'EC Uptake', val:sc.uptakeScore},
-    {label:'Uniformity', val:sc.uniformityScore},
-    {label:'Irr Response', val:sc.responseScore},
+    {label:'VPD', val:sc.vpdScore, tip:'How close VPD is to phase target'},
+    {label:'Dewpoint', val:sc.dewpointScore, tip:'Spread between temp and dewpoint — risk of condensation if low'},
+    {label:'Stability', val:sc.stabilityScore, tip:'Temp/RH/VPD swing across 3-hour windows'},
+    {label:'EC Uptake', val:sc.uptakeScore, tip:'EC change over 24h — indicates how hard plants are feeding'},
+    {label:'Uniformity', val:sc.uniformityScore, tip:'Front vs back VWC delta across tables'},
+    {label:'Irr Response', val:sc.responseScore, tip:'VWC rise/fall pattern around irrigation events'},
   ].filter(s=>s.val!=null&&s.val!=='');
+
+  const notes = explainScore(sc);
 
   el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
@@ -5666,19 +5696,28 @@ function renderRoomScoreSection(el, sc, roomId){
 
     <!-- Index breakdown -->
     <div style="margin-bottom:10px">
-      ${bar(sc.envIndex,'Environment index')}
-      ${bar(sc.demandIndex,'Demand index')}
-      ${sc.execIndex!=null?bar(sc.execIndex,'Execution index'):''}
-      ${sc.stress?`<div style="font-size:10px;color:var(--text3);margin-top:4px">Stress penalty: <span style="color:var(--red);font-family:var(--mono)">−${sc.stress}</span></div>`:''}
+      ${bar(sc.envIndex,'Environment index',envExplain)}
+      ${bar(sc.demandIndex,'Demand index',demandExplain)}
+      ${sc.execIndex!=null?bar(sc.execIndex,'Execution index','Task completion + room checks + additives'):''}
+      ${sc.stress?`<div style="font-size:10px;color:var(--text3);margin-top:4px">Stress penalty: <span style="color:var(--red);font-family:var(--mono)">−${sc.stress}</span> <span style="font-size:9px">T1 alerts + dewpoint events + EC ceiling</span></div>`:''}
+    </div>
+
+    <!-- Score notes (rule-based breakdown) -->
+    <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Why this score</div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        ${notes.map(n=>`<div style="font-size:11px;color:${n.startsWith('✓')?'var(--green)':n.startsWith('⚠')?'var(--amber)':'var(--text3)'};line-height:1.4">${n}</div>`).join('')}
+      </div>
     </div>
 
     <!-- Sub-score grid -->
     ${subScores.length?`<div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Sub-scores</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
-        ${subScores.map(s=>`<div style="background:var(--bg2);border-radius:var(--r);padding:5px;text-align:center;border:1px solid var(--border)">
+        ${subScores.map(s=>`<div style="background:var(--bg2);border-radius:var(--r);padding:5px;text-align:center;border:1px solid var(--border)" title="${s.tip}">
           <div style="font-size:9px;color:var(--text3);margin-bottom:2px">${s.label}</div>
           <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:${barColor(s.val)}">${s.val}</div>
+          <div style="font-size:8px;color:var(--text3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${s.tip}">${s.tip}</div>
         </div>`).join('')}
       </div>
     </div>`:''}
@@ -5723,17 +5762,32 @@ async function generateRoomAnalysis(roomId){
   const btn=document.querySelector(`button[onclick="generateRoomAnalysis('${roomId}')"]`);
   const textEl=document.getElementById('rdm-ai-text-'+roomId);
   if(btn){ btn.disabled=true; btn.textContent='Analyzing…'; }
-  if(textEl) textEl.innerHTML='<span style="color:var(--text3);font-style:italic">Generating analysis…</span>';
+  if(textEl) textEl.innerHTML='<span style="color:var(--text3);font-style:italic">Generating analysis — this takes 10–15 seconds…</span>';
   try{
-    const json=await fetch(gsUrl+'?action=generateAnalysis&room='+roomId+'&t='+Date.now()).then(r=>r.json());
+    // Use POST to avoid URL length limits and ensure Apps Script handles it correctly
+    const resp = await fetch(gsUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'generateAnalysis',room:roomId})
+    });
+    const json = await resp.json();
     if(json.ok&&json.analysis){
-      if(textEl) textEl.innerHTML=`<div style="margin-bottom:4px">${json.analysis}</div><div style="font-size:10px;color:var(--text3)">Day ${json.cycleDay} · ${json.phase}</div>`;
+      if(textEl) textEl.innerHTML=`<div style="margin-bottom:6px;line-height:1.6">${json.analysis}</div><div style="font-size:10px;color:var(--text3)">Day ${json.cycleDay} · ${json.phase} · Generated ${new Date().toLocaleTimeString()}</div>`;
       // Cache it
       const _analyses=L('wg_room_analyses',{});
       _analyses[roomId]={analysis:json.analysis,cycleDay:json.cycleDay,phase:json.phase,generatedAt:new Date().toISOString()};
       S('wg_room_analyses',_analyses);
     } else {
-      if(textEl) textEl.innerHTML='<span style="color:var(--amber)">Analysis failed — try again</span>';
+      // Fallback: try GET if POST fails
+      const json2=await fetch(gsUrl+'?action=generateAnalysis&room='+roomId+'&t='+Date.now()).then(r=>r.json());
+      if(json2.ok&&json2.analysis){
+        if(textEl) textEl.innerHTML=`<div style="margin-bottom:6px;line-height:1.6">${json2.analysis}</div><div style="font-size:10px;color:var(--text3)">Day ${json2.cycleDay} · ${json2.phase}</div>`;
+        const _analyses=L('wg_room_analyses',{});
+        _analyses[roomId]={analysis:json2.analysis,cycleDay:json2.cycleDay,phase:json2.phase,generatedAt:new Date().toISOString()};
+        S('wg_room_analyses',_analyses);
+      } else {
+        if(textEl) textEl.innerHTML='<span style="color:var(--amber)">Analysis failed — check Apps Script logs. Error: '+(json.error||json2.error||'unknown')+'</span>';
+      }
     }
   }catch(e){
     if(textEl) textEl.innerHTML='<span style="color:var(--red)">Error: '+e.message+'</span>';
