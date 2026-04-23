@@ -4178,8 +4178,20 @@ async function pullGrowlinkFromCloud(silent=false){
     setTimeout(()=>{try{renderSupportRooms();}catch(e){}},0);
     // Update 24h dryback averages from GL_History if available
     setTimeout(()=>{try{updateDryback24h();}catch(e){}},200);
+    // Pre-fetch performance scores in background (leads only) so modal opens instantly
+    setTimeout(()=>{try{prefetchPerfScores();}catch(e){}},500);
 
   }catch(e){ if(!silent) console.warn('Growlink pull failed:',e); }
+}
+
+// Pre-fetch all room performance scores into localStorage cache
+// Fires silently after every Growlink pull — modal opens instantly after
+async function prefetchPerfScores(){
+  if(!gsUrl || currentRole!=='lead') return;
+  try{
+    const json = await fetch(gsUrl+'?action=getScores&t='+Date.now()).then(r=>r.json());
+    if(json.ok && json.data) S('wg_perf_scores', json.data);
+  }catch(e){ /* silent fail — scores will load on demand if this fails */ }
 }
 
 // Calculate 24h average dryback per room from GL_History data
