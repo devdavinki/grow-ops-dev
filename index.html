@@ -5434,28 +5434,37 @@ function openRoomModal(room) {
   const noEl   =document.getElementById('rdm-nodata');
 
   // Load performance scores for this room (leads only)
+  // Always fetch fresh — prefetch keeps it fast, stale cache causes blank breakdowns
   if(currentRole==='lead' && scoreEl){
-    scoreEl.innerHTML='';
     const _roomId = room.id || (room.name||'').toLowerCase().replace('room ','r').replace(' ','');
+    // Show cached instantly while fresh data loads
     const _cachedScores = L('wg_perf_scores',{});
     const _sc = _cachedScores[_roomId];
-    if(_sc){
+    if(_sc && _sc.vpdScore!=null){
+      // Cache has full score data — render immediately
       renderRoomScoreSection(scoreEl, _sc, _roomId);
     } else {
-      scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">Performance score loading…</div>`;
-      // Fetch from cloud
-      if(gsUrl){
-        fetch(gsUrl+'?action=getScores&t='+Date.now())
-          .then(r=>r.json())
-          .then(json=>{
-            if(json.ok&&json.data){
-              S('wg_perf_scores',json.data);
-              const sc=json.data[_roomId];
-              if(sc) renderRoomScoreSection(scoreEl,sc,_roomId);
-              else scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">No score data yet — GL_History needs 1+ hours of data.</div>`;
-            }
-          }).catch(()=>{ scoreEl.innerHTML=''; });
-      }
+      scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">Loading score…</div>`;
+    }
+    // Always fetch fresh in background to get latest + ensure breakdown fields present
+    if(gsUrl){
+      fetch(gsUrl+'?action=getScores&t='+Date.now())
+        .then(r=>r.json())
+        .then(json=>{
+          console.log('[Score] fresh fetch:', json.ok, json.error||'');
+          if(json.ok&&json.data){
+            S('wg_perf_scores',json.data);
+            const sc=json.data[_roomId];
+            if(sc) renderRoomScoreSection(scoreEl,sc,_roomId);
+            else scoreEl.innerHTML=`<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for ${_roomId} — run calculateDailyScores() in Apps Script editor to generate.</div>`;
+          } else {
+            // Keep cached display if fetch fails, show warning
+            if(!_sc) scoreEl.innerHTML=`<div style="font-size:11px;color:var(--amber);padding:8px 0">${json.error||'Score fetch failed — ensure Apps Script is redeployed with getScores action.'}</div>`;
+          }
+        }).catch(e=>{
+          console.warn('[Score] fetch error:', e);
+          if(!_sc) scoreEl.innerHTML=`<div style="font-size:11px;color:var(--red);padding:8px 0">Score fetch error</div>`;
+        });
     }
   } else if(scoreEl){ scoreEl.innerHTML=''; }
 
