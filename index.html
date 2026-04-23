@@ -5789,13 +5789,22 @@ async function refreshRoomScore(roomId){
   const scoreEl=document.getElementById('rdm-score-section');
   if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--text3);padding:8px 0">Refreshing…</div>';
   try{
-    const json=await fetch(gsUrl+'?action=getScores&t='+Date.now()).then(r=>r.json());
+    const resp = await fetch(gsUrl+'?action=getScores&t='+Date.now());
+    const json = await resp.json();
+    console.log('[Score] getScores response:', json);
     if(json.ok&&json.data){
       S('wg_perf_scores',json.data);
       const sc=json.data[roomId];
+      console.log('[Score] room score for '+roomId+':', sc);
       if(sc&&scoreEl) renderRoomScoreSection(scoreEl,sc,roomId);
+      else if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for '+roomId+' — run calculateDailyScores() in Apps Script to generate scores.</div>';
+    } else {
+      if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 0">'+(json.error||'Score fetch failed — check Apps Script is redeployed with getScores action.')+'</div>';
     }
-  }catch(e){}
+  }catch(e){
+    if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--red);padding:8px 0">Error: '+e.message+'</div>';
+    console.error('[Score] refresh error:', e);
+  }
 }
 
 
