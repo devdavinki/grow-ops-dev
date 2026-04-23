@@ -5442,12 +5442,8 @@ function openRoomModal(room) {
     // Show cached instantly while fresh data loads
     const _cachedScores = L('wg_perf_scores',{});
     const _sc = _cachedScores[_roomId];
-    if(_sc && _sc.vpdScore!=null){
-      // Cache has full score data — render immediately
-      renderRoomScoreSection(scoreEl, _sc, _roomId, false);
-    } else {
-      scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">Loading score…</div>`;
-    }
+    // Always show loading first — prevents stale expanded state flashing
+    scoreEl.innerHTML=`<div style="font-size:11px;color:var(--text3);padding:8px 0">Loading score…</div>`;
     // Always fetch fresh in background to get latest + ensure breakdown fields present
     if(gsUrl){
       fetch(gsUrl+'?action=getScores&t='+Date.now())
@@ -5736,11 +5732,11 @@ function renderRoomScoreSection(el, sc, roomId, expanded){
   const _issueHint = _topIssues.length ? _topIssues.slice(0,2).join(' · ') : (breakdown.filter(i=>i.sev==='watch').length ? breakdown.filter(i=>i.sev==='watch')[0].headline : 'All metrics on target');
 
   if(!expanded){
-    el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;cursor:pointer" onclick="renderRoomScoreSection(document.getElementById('rdm-score-section'),${JSON.stringify(sc).replace(/</g,'\u003c')},'${roomId}',true)">
+    el.innerHTML=`<div id="score-collapsed-${roomId}" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;cursor:pointer">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div>
+        <div style="min-width:0;flex:1">
           <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px">Performance Score · Day ${sc.cycleDay} · ${sc.phase}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px">${_issueHint}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_issueHint}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
           <div style="text-align:center">
@@ -5755,12 +5751,18 @@ function renderRoomScoreSection(el, sc, roomId, expanded){
         </div>
       </div>
     </div>`;
+    // Store score on element for click handler
+    el._scoreData = sc;
+    el._scoreRoomId = roomId;
+    document.getElementById('score-collapsed-'+roomId).addEventListener('click', ()=>{
+      renderRoomScoreSection(el, el._scoreData, el._scoreRoomId, true);
+    });
     return;
   }
 
   el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="renderRoomScoreSection(document.getElementById('rdm-score-section'),${JSON.stringify(sc).replace(/</g,'\u003c')},'${roomId}',false)">
+      <div id="score-collapse-btn-${roomId}" style="display:flex;align-items:center;gap:8px;cursor:pointer">
         <div style="font-size:16px;color:var(--text3)">‹</div>
         <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3)">Performance Score · Day ${sc.cycleDay} · ${sc.phase}</div>
       </div>
@@ -5828,6 +5830,14 @@ function renderRoomScoreSection(el, sc, roomId, expanded){
     </div>`:''}
 
   </div>`;
+  // Wire collapse button
+  const _collapseBtn = document.getElementById('score-collapse-btn-'+roomId);
+  if(_collapseBtn){
+    const _scCopy = sc;
+    _collapseBtn.addEventListener('click', ()=>{
+      renderRoomScoreSection(el, _scCopy, roomId, false);
+    });
+  }
 }
 
 async function refreshRoomScore(roomId){
