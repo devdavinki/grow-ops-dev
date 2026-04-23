@@ -5436,7 +5436,8 @@ function openRoomModal(room) {
   // Load performance scores for this room (leads only)
   // Always fetch fresh — prefetch keeps it fast, stale cache causes blank breakdowns
   if(currentRole==='lead' && scoreEl){
-    const _roomId = room.id || (room.name||'').toLowerCase().replace('room ','r').replace(' ','');
+    const _roomId = room.id || (room.name||'').toLowerCase().replace('flower room ','r').replace('room ','r').replace(' ','');
+    console.log('[Score] openRoomModal roomId resolved:', _roomId, '| room.id:', room.id, '| room.name:', room.name);
     // Show cached instantly while fresh data loads
     const _cachedScores = L('wg_perf_scores',{});
     const _sc = _cachedScores[_roomId];
