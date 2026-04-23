@@ -5461,7 +5461,9 @@ function openRoomModal(room) {
             else scoreEl.innerHTML=`<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for ${_roomId} — run calculateDailyScores() in Apps Script editor to generate.</div>`;
           } else {
             // Keep cached display if fetch fails, show warning
-            if(!_sc) scoreEl.innerHTML=`<div style="font-size:11px;color:var(--amber);padding:8px 0">${json.error||'Score fetch failed — ensure Apps Script is redeployed with getScores action.'}</div>`;
+            const _errMsg=json.error||'Score fetch failed';
+              const _hint=_errMsg.includes('Unknown action')?'Apps Script needs redeployment — Deploy → Manage deployments → New version → Deploy':_errMsg.includes('No score')?'Run calculateDailyScores() in Apps Script to generate':'Check Apps Script logs';
+              if(!_sc) scoreEl.innerHTML=`<div style="font-size:11px;padding:8px 0;line-height:1.6;color:var(--amber)"><b>Score unavailable:</b> `+_errMsg+`<br><span style="color:var(--text3)">→ `+_hint+`</span></div>`;
           }
         }).catch(e=>{
           console.warn('[Score] fetch error:', e);
@@ -5810,7 +5812,9 @@ async function refreshRoomScore(roomId){
       if(sc&&scoreEl) renderRoomScoreSection(scoreEl,sc,roomId);
       else if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 0">No score yet for '+roomId+' — run calculateDailyScores() in Apps Script to generate scores.</div>';
     } else {
-      if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 0">'+(json.error||'Score fetch failed — check Apps Script is redeployed with getScores action.')+'</div>';
+      const _errMsg=json.error||'Score fetch failed';
+              const _hint=_errMsg.includes('Unknown action')?'Apps Script needs redeployment — Deploy → Manage deployments → New version → Deploy':_errMsg.includes('No score')?'Run calculateDailyScores() in Apps Script to generate':'Check Apps Script logs';
+              if(!_sc) scoreEl.innerHTML=`<div style="font-size:11px;padding:8px 0;line-height:1.6;color:var(--amber)"><b>Score unavailable:</b> `+_errMsg+`<br><span style="color:var(--text3)">→ `+_hint+`</span></div>`;
     }
   }catch(e){
     if(scoreEl) scoreEl.innerHTML='<div style="font-size:11px;color:var(--red);padding:8px 0">Error: '+e.message+'</div>';
