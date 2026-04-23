@@ -5624,25 +5624,69 @@ function renderRoomScoreSection(el, sc, roomId){
   const barColor = v => v>=80?'var(--green)':v>=60?'var(--blue)':v>=40?'var(--amber)':'var(--red)';
 
   // Rule-based score explanations — no API call needed
-  const explainScore = (sc) => {
-    const notes = [];
-    // What's driving the score up
-    if(sc.vpdScore>=85) notes.push('✓ VPD well-managed');
-    if(sc.dewpointScore>=85) notes.push('✓ Dewpoint spread healthy');
-    if(sc.stabilityScore>=85) notes.push('✓ Environment stable');
-    if(sc.uptakeScore>=80) notes.push('✓ Plants feeding well');
-    if(sc.uniformityScore>=85) notes.push('✓ Even substrate distribution');
-    // What's pulling it down
-    if(sc.vpdScore!=null&&sc.vpdScore<70) notes.push('⚠ VPD off target — check HVAC/lights-on ramp');
-    if(sc.dewpointScore!=null&&sc.dewpointScore<70) notes.push('⚠ Dewpoint spread low — condensation risk');
-    if(sc.stabilityScore!=null&&sc.stabilityScore<70) notes.push('⚠ Temp/RH swinging — check controller stability');
-    if(sc.uptakeScore!=null&&sc.uptakeScore<60) notes.push('⚠ Low EC uptake — plants underperforming or overwatered');
-    if(sc.uniformityScore!=null&&sc.uniformityScore<70) notes.push('⚠ Front/back VWC gap — check dripper output');
-    if(sc.responseScore!=null&&sc.responseScore<70) notes.push('⚠ Irrigation response weak — review shot size/timing');
-    if(sc.stress&&sc.stress>10) notes.push('⚠ Stress penalty active ('+sc.stress+' pts) — check T1 alerts');
-    if(sc.confidence<70) notes.push('ℹ Low confidence — limited data, score is provisional');
-    if(!notes.length) notes.push('ℹ Score is within expected range for this phase');
-    return notes;
+  // Rich breakdown items — each has a severity, headline, detail, and fix steps
+  const buildBreakdown = (sc) => {
+    const items = [];
+    const add = (sev, headline, detail, fixes) => items.push({sev, headline, detail, fixes});
+
+    // ── VPD ──
+    if(sc.vpdScore!=null){
+      if(sc.vpdScore>=85) add('good','VPD on target','VPD is tracking the phase setpoint closely — plants are transpiring at the right rate.',[]);
+      else if(sc.vpdScore>=70) add('watch','VPD slightly off target','Average VPD is close but drifting from the phase target. This is often a lights-on ramp issue where VPD spikes before HVAC catches up.',['Check lights-on ramp — VPD should rise gradually over 30–60 min, not spike','Verify day/night setpoint transitions in the controller','If RH is the culprit, check dehumidifier capacity for current canopy size']);
+      else if(sc.vpdScore>=50) add('issue','VPD consistently off target','VPD is meaningfully outside phase targets for most of the day. This limits transpiration efficiency and can stress the canopy.',['Pull the Growlink trend for this room and identify when VPD goes out of range','If high VPD: RH is too low — check dehumidifier setpoints and capacity','If low VPD: temp is too low or RH too high — verify heating setpoints and air circulation','Check for sensor placement issues — sensors near light fixtures read high']);
+      else add('critical','VPD severely off target','VPD is far outside phase targets. Plants are either under severe transpiration stress (high VPD) or at risk of disease pressure (low VPD).',['Immediate: check Growlink live readings and compare to handheld meter to rule out sensor fault','If confirmed: escalate to lead — HVAC or dehumidifier intervention needed','Do not adjust fertigation until VPD is corrected — uptake readings will be unreliable']);
+    }
+
+    // ── Dewpoint ──
+    if(sc.dewpointScore!=null){
+      if(sc.dewpointScore>=85) add('good','Dewpoint spread healthy','Temp-to-dewpoint spread is wide enough that condensation risk is low throughout the day.',[]);
+      else if(sc.dewpointScore>=60) add('watch','Dewpoint spread narrowing','The gap between air temp and dewpoint is tightening. If it drops below 2°F, surfaces in the room will start collecting condensation.',['Monitor lights-off period especially — temp drops while RH can rise','Check that dehumidifiers are running during dark period','Make sure exhaust fans stay active overnight']);
+      else add('issue','Dewpoint spread critically low','Temp and dewpoint are nearly equal, meaning condensation is likely forming on canopy surfaces and equipment. This is a primary driver of mold and pathogen pressure.',['Immediate: check buds and lower canopy for any visible moisture or powder','Increase dehumidifier output during lights-off — this window is highest risk','Check that night temp setpoint is not dropping below dewpoint','Consider raising night temp setpoint by 2–3°F or adding supplemental dehumidification']);
+    }
+
+    // ── Stability ──
+    if(sc.stabilityScore!=null){
+      if(sc.stabilityScore>=85) add('good','Environment stable','Temp, RH and VPD are holding steady across 3-hour windows — controller is doing its job.',[]);
+      else if(sc.stabilityScore>=65) add('watch','Some environmental swings','Readings are fluctuating more than ideal across the day. Plants adapt to minor swings but chronic instability adds stress.',['Check if fluctuations are tied to a specific time of day (lights-on ramp, irrigation events, HVAC cycles)','Verify controller PID settings are tuned for current room conditions','Check for air leaks or poor insulation causing temp swings']);
+      else add('issue','High environmental instability','Temp or RH is swinging significantly across 3-hour windows. This is penalizing the environment index and adding direct plant stress.',['Pull Growlink historical chart for this room and identify the pattern of swings','If temp swings: check heating/cooling cycling frequency — may need PID tuning','If RH swings: often caused by irrigation events spiking humidity — check exhaust timing relative to irrigation','Verify all HVAC equipment is functioning — a failing unit causes characteristic swing patterns']);
+    }
+
+    // ── EC Uptake ──
+    if(sc.uptakeScore!=null){
+      if(sc.uptakeScore>=85) add('good','Plants feeding well','EC is declining over 24 hours at a healthy rate — plants are actively taking up nutrients.',[]);
+      else if(sc.uptakeScore>=65) add('watch','EC uptake slightly low','Plants are feeding but at a lower rate than expected for this phase. Could be early signs of root zone issues or environment affecting demand.',['Check VWC levels — if substrate is staying too wet, roots cannot pull effectively','Verify runoff EC at next room check — if runoff EC is much higher than feed EC, salts are building','Cross-reference with VPD score — low VPD directly reduces transpiration-driven uptake']);
+      else add('issue','Low EC uptake — plants underperforming','EC is not declining meaningfully over 24 hours. Plants are not feeding at the expected rate for this phase and cycle day.',['Check substrate VWC — overwatered substrate is the most common cause of low uptake','Pull runoff EC readings and compare to feed EC — a ratio >1.3 suggests salt accumulation','Check root zone temp — soil temp below 65°F significantly reduces nutrient uptake','Verify irrigation frequency and shot size — may need to reduce frequency to allow proper dryback between shots','If in stack phase, this is a high-priority issue — uptake directly impacts yield potential']);
+    }
+
+    // ── Uniformity ──
+    if(sc.uniformityScore!=null){
+      if(sc.uniformityScore>=85) add('good','Substrate uniform across tables','Front and back VWC readings are closely matched — irrigation is distributing evenly.',[]);
+      else if(sc.uniformityScore>=65) add('watch','Minor front/back VWC gap','Small difference between front and back probe readings. Worth monitoring but not yet impacting plants significantly.',['Note which side is consistently wetter or drier','Check dripper placement and output on the lower-performing side','At next room visit, manually check dripper flow rates on a few plants']);
+      else add('issue','Significant front/back distribution gap','Front and back of tables are receiving meaningfully different amounts of water. Plants on the dry side are under stress while the wet side may develop root issues.',['Immediate action at next room visit: check all drippers on the low-VWC side for blockages or low flow','Verify dripper placement — should be at the base of the stem, not offset','Check pressure at the far end of the irrigation line — pressure drop causes uneven distribution','Consider running a manual flush on the dry side to rehydrate before next scheduled irrigation']);
+    }
+
+    // ── Irrigation Response ──
+    if(sc.responseScore!=null){
+      if(sc.responseScore>=85) add('good','Irrigation response strong','VWC is rising cleanly after shots and drying back properly between events — shot sizing and timing are dialed.',[]);
+      else if(sc.responseScore>=60) add('watch','Irrigation response inconsistent','VWC response to shots is variable. Some shots are producing strong rises, others are not.',['Check for clogged or partially blocked drippers on individual plants','Verify substrate is not hydrophobic on dry spots — rewetting can take time after severe dryback','Look at time between shots — if too frequent, substrate never dries back enough to respond well to next shot']);
+      else if(sc.responseScore!=null) add('issue','Weak irrigation response detected','VWC is not rising or falling as expected around irrigation events. Either shots are too small, substrate is hydrophobic, or sensor placement is off.',['Check shot duration and volume — increase by 10–15% and monitor response','Inspect substrate — severely dry rockwool or coco can become hydrophobic and repel water','Verify sensor probe is seated correctly in the root zone, not in an air gap','If substrate is saturated and not responding, reduce shot frequency significantly and allow dryback']);
+    }
+
+    // ── Stress penalty ──
+    if(sc.stress&&sc.stress>5){
+      if(sc.stress<=10) add('watch','Minor stress penalty (−'+sc.stress+' pts)','One or more T1 alerts or environmental boundary events contributed a small penalty to the score.',['Review T1 alert log for this room — identify which thresholds were breached','Verify alerts are calibrated correctly and not firing on sensor noise']);
+      else add('issue','Significant stress penalty (−'+sc.stress+' pts)','Multiple T1 alerts or sustained boundary events are penalizing the score. This indicates the room experienced real stress events that need addressing.',['Pull the T1 alert log and identify the pattern — is it the same threshold every time?','Check if alerts are clustering at a specific time of day (lights-on transition is most common)','Sustained T1 events during stack phase have outsized impact on final cycle score']);
+    }
+
+    // ── Confidence ──
+    if(sc.confidence<70) add('info','Score confidence limited ('+sc.confidence+'%)','Not enough data points to calculate a fully reliable score. Score will improve as GL_History accumulates more readings.',['Score becomes fully reliable after 24+ hours of GL_History data for this room','Provisional inputs (dryback, irrigation response) become active once event data is available']);
+
+    // Positive summary if everything is clean
+    const issues = items.filter(i=>i.sev==='issue'||i.sev==='critical');
+    const watches = items.filter(i=>i.sev==='watch');
+    if(!issues.length && !watches.length) add('good','All metrics within target range','No significant issues detected. Room is performing as expected for this phase.',[]);
+
+    return items;
   };
 
   const bar = (v,label,explain) => v!=null?`<div style="margin-bottom:6px">
@@ -5669,7 +5713,7 @@ function renderRoomScoreSection(el, sc, roomId){
     {label:'Irr Response', val:sc.responseScore, tip:'VWC rise/fall pattern around irrigation events'},
   ].filter(s=>s.val!=null&&s.val!=='');
 
-  const notes = explainScore(sc);
+  const breakdown = buildBreakdown(sc);
 
   el.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
@@ -5702,11 +5746,26 @@ function renderRoomScoreSection(el, sc, roomId){
       ${sc.stress?`<div style="font-size:10px;color:var(--text3);margin-top:4px">Stress penalty: <span style="color:var(--red);font-family:var(--mono)">−${sc.stress}</span> <span style="font-size:9px">T1 alerts + dewpoint events + EC ceiling</span></div>`:''}
     </div>
 
-    <!-- Score notes (rule-based breakdown) -->
+    <!-- Rich score breakdown -->
     <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Why this score</div>
-      <div style="display:flex;flex-direction:column;gap:3px">
-        ${notes.map(n=>`<div style="font-size:11px;color:${n.startsWith('✓')?'var(--green)':n.startsWith('⚠')?'var(--amber)':'var(--text3)'};line-height:1.4">${n}</div>`).join('')}
+      <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Score breakdown</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${breakdown.map(item=>{
+          const sevColor = item.sev==='good'?'var(--green)':item.sev==='watch'?'var(--amber)':item.sev==='issue'?'var(--red)':item.sev==='critical'?'var(--red)':'var(--text3)';
+          const sevIcon  = item.sev==='good'?'✓':item.sev==='watch'?'⚠':item.sev==='issue'?'✕':item.sev==='critical'?'✕':'ℹ';
+          const bgColor  = item.sev==='good'?'rgba(34,197,94,0.06)':item.sev==='watch'?'rgba(245,158,11,0.06)':item.sev==='issue'||item.sev==='critical'?'rgba(239,68,68,0.06)':'var(--bg2)';
+          return `<div style="background:${bgColor};border:1px solid ${item.sev==='good'?'rgba(34,197,94,0.2)':item.sev==='watch'?'rgba(245,158,11,0.2)':item.sev==='issue'||item.sev==='critical'?'rgba(239,68,68,0.2)':'var(--border)'};border-radius:var(--r);padding:8px 10px">
+            <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:${item.detail||item.fixes.length?'5px':'0'}">
+              <span style="color:${sevColor};font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px">${sevIcon}</span>
+              <span style="font-size:12px;font-weight:600;color:var(--text)">${item.headline}</span>
+            </div>
+            ${item.detail?`<div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:${item.fixes.length?'6px':'0'};padding-left:17px">${item.detail}</div>`:''}
+            ${item.fixes.length?`<div style="padding-left:17px">
+              <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Actions</div>
+              ${item.fixes.map(f=>`<div style="font-size:11px;color:var(--text2);line-height:1.5;display:flex;gap:5px;margin-bottom:2px"><span style="color:var(--text3);flex-shrink:0">→</span>${f}</div>`).join('')}
+            </div>`:''}
+          </div>`;
+        }).join('')}
       </div>
     </div>
 
