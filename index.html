@@ -708,6 +708,7 @@ button { cursor: pointer; }
           <button id="morning-sort-dryback" onclick="setMorningSort('dryback')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-weight:600">Dryback ↓</button>
           <button id="morning-sort-vwc" onclick="setMorningSort('vwc')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">VWC ↑</button>
           <button id="morning-sort-ec" onclick="setMorningSort('ec')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">EC ↓</button>
+          <button id="morning-sort-overnight" onclick="setMorningSort('overnight')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Overnight DB ↓</button>
           <button onclick="renderMorningAttention()" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">↻</button>
         </div>
       </div>
@@ -2433,6 +2434,30 @@ function renderMorningAttention(){
   const wrap = document.getElementById('morning-attention-list');
   if(!wrap) return;
 
+  // Load overnight dryback from cached GL_ProbeMetrics (keyed by roomId → probeLabel)
+  const _cachedPM = L('wg_probe_metrics_raw', null);
+  const _overnightDB = {}; // key: r5_T2B → overnight dryback %
+  if(_cachedPM && _cachedPM.length > 1){
+    const _pmHdr = _cachedPM[0].map(h=>String(h).toLowerCase().trim());
+    const _pmRoomCol = _pmHdr.indexOf('room_id');
+    const _pmProbeCol = _pmHdr.indexOf('probe');
+    const _pmOvDbCol  = _pmHdr.indexOf('overnight_dryback_pct');
+    const _pmPeakCol  = _pmHdr.indexOf('day_peak_vwc');
+    const _pmLowCol   = _pmHdr.indexOf('day_low_vwc');
+    const today = new Date().toISOString().split('T')[0];
+    const _pmDateCol  = _pmHdr.indexOf('date');
+    _cachedPM.slice(1).forEach(row => {
+      const d = String(row[_pmDateCol]||'').split('T')[0];
+      if(d !== today) return;
+      const rid    = String(row[_pmRoomCol]||'');
+      const probe  = String(row[_pmProbeCol]||'');
+      const ovDb   = row[_pmOvDbCol]!==''&&row[_pmOvDbCol]!=null ? parseFloat(row[_pmOvDbCol]) : null;
+      const peak   = row[_pmPeakCol]!==''&&row[_pmPeakCol]!=null ? parseFloat(row[_pmPeakCol]) : null;
+      const low    = row[_pmLowCol]!==''&&row[_pmLowCol]!=null  ? parseFloat(row[_pmLowCol])  : null;
+      if(rid && probe) _overnightDB[rid+'_'+probe] = { ovDb, peak, low };
+    });
+  }
+
   // Build probe list from all flower room Growlink data
   const probes = [];
   rooms.filter(r=>r.tier!=='Support').forEach(room => {
@@ -2445,6 +2470,9 @@ function renderMorningAttention(){
     Object.entries(tables).forEach(([tNum, sides]) => {
       Object.entries(sides).forEach(([pos, data]) => {
         if(!data) return;
+        const _roomId = 'r'+roomNum;
+        const _probeKey = _roomId + '_T'+tNum+(pos==='F'?'F':'B');
+        const _pmData = _overnightDB[_probeKey] || null;
         probes.push({
           room: room.name,
           roomNum,
@@ -2452,9 +2480,12 @@ function renderMorningAttention(){
           pos,
           vwc: data.vwc,
           ec: data.ec,
-          dryback: data.dryback,  // may be null if no peak history yet
+          dryback: data.dryback,
           peak: data.peak,
           id: `${room.name}_T${tNum}_${pos}`,
+          overnightDb: _pmData ? _pmData.ovDb : null,
+          overnightPeak: _pmData ? _pmData.peak : null,
+          overnightLow: _pmData ? _pmData.low : null,
         });
       });
     });
@@ -2472,7 +2503,14 @@ function renderMorningAttention(){
 
   // Sort based on morningSortMode
   probes.sort((a,b) => {
-    if(morningSortMode === 'vwc') {
+    if(morningSortMode === 'overnight') {
+      // Sort by overnight dryback — highest (most dry) first, negatives last
+      const aDb = a.overnightDb; const bDb = b.overnightDb;
+      if(aDb==null && bDb==null) return 0;
+      if(aDb==null) return 1; if(bDb==null) return -1;
+      if(aDb<0 && bDb>=0) return 1; if(bDb<0 && aDb>=0) return -1;
+      return bDb - aDb;
+    } else if(morningSortMode === 'vwc') {
       // Lowest VWC first (driest), nulls last
       if(a.vwc == null && b.vwc == null) return 0;
       if(a.vwc == null) return 1;
@@ -2537,6 +2575,11 @@ function renderMorningAttention(){
             <span style="color:${isDone ? 'var(--text3)' : (p.dryback!=null?dbColor(p.dryback):'var(--text3)')};font-weight:${p.dryback!=null?'700':'400'}">${p.dryback!=null?p.dryback.toFixed(1)+'%':'—'}</span>
           </span>
           ${p.peak != null ? `<span style="font-size:10px;color:var(--text3)">pk ${p.peak.toFixed(1)}%</span>` : ''}
+          ${p.overnightDb != null ? `<span style="font-size:11px;font-family:var(--mono);border-left:1px solid var(--border2);padding-left:10px;margin-left:2px">
+            <span style="color:var(--text3)">Overnight DB </span>
+            <span style="font-weight:700;color:${isDone?'var(--text3)':p.overnightDb<0?'var(--blue)':p.overnightDb<8?'var(--amber)':p.overnightDb<=15?'var(--green)':'var(--red)'}">${p.overnightDb.toFixed(1)}%</span>
+            <span style="font-size:9px;color:var(--text3)">${p.overnightDb<0?' wetter overnight':p.overnightDb<8?' shallow':p.overnightDb<=15?' ✓':' too deep'}</span>
+          </span>` : ''}
         </div>
       </div>
       <!-- Done by / or action -->
@@ -4286,12 +4329,22 @@ async function parseMetrcXLSX(file){
 function parseMetrcCSV(text){
   const lines=text.trim().split(/\r?\n/);
   if(!lines.length)return[];
-  const headers=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim());
-  return lines.slice(1).map(line=>{
+  // Auto-detect delimiter — METRC exports as CSV or TSV depending on browser/OS
+  const firstLine=lines[0];
+  const tabCount=firstLine.split('\t').length-1;
+  const commaCount=firstLine.split(',').length-1;
+  const delim=tabCount>commaCount?'\t':',';
+  const splitLine=(line)=>{
+    if(delim==='\t') return line.split('\t').map(v=>v.replace(/^"|"$/g,'').trim());
     const vals=[];let cur='';let inQ=false;
     for(const ch of line){if(ch==='"'){inQ=!inQ;}else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}
     vals.push(cur.trim());
-    const row={};headers.forEach((h,i)=>row[h]=(vals[i]||'').replace(/^"|"$/g,''));
+    return vals.map(v=>v.replace(/^"|"$/g,''));
+  };
+  const headers=splitLine(firstLine);
+  return lines.slice(1).map(line=>{
+    const vals=splitLine(line);
+    const row={};headers.forEach((h,i)=>row[h]=(vals[i]||'').trim());
     return row;
   }).filter(r=>Object.values(r).some(v=>v));
 }
