@@ -5591,6 +5591,8 @@ function openRoomModal(room) {
     _probeMetrics = pm[_roomIdForMetrics] || null;
     console.log('[ProbeMetrics] from cache — keys:', _probeMetrics ? Object.keys(_probeMetrics) : 'none');
   }
+  // Track current open room so async re-render targets the right room
+  window._currentModalRoomId = _roomIdForMetrics;
 
   // Always fetch fresh — re-renders substrate section when data arrives
   if(gsUrl){
@@ -5608,11 +5610,10 @@ function openRoomModal(room) {
         console.log('[ProbeMetrics] rooms in data:', Object.keys(pm));
         _probeMetrics = pm[_roomIdForMetrics] || null;
         console.log('[ProbeMetrics] probes for', _roomIdForMetrics, ':', _probeMetrics ? Object.keys(_probeMetrics) : 'none');
-        // Re-render the substrate section with fresh data
+        // Only re-render if this room's modal is still open
+        if(window._currentModalRoomId !== _roomIdForMetrics) return;
         const _subEl2 = document.getElementById('rdm-substrate-section');
-        if(_subEl2 && _subEl2.innerHTML && _probeMetrics){
-          // Trigger a substrate re-render by re-calling openRoomModal logic for substrate only
-          // Find all probe cards and inject metrics directly
+        if(_subEl2 && _probeMetrics){
           _subEl2.querySelectorAll('[data-probe-key]').forEach(el=>{
             const key = el.dataset.probeKey;
             const pm2 = _probeMetrics[key];
@@ -5637,20 +5638,48 @@ function openRoomModal(room) {
     if(_pkVwc===null && _loVwc===null && _ovDb===null && _avgBt===null) return '';
     let h = '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:5px">Dryback metrics · today</div>';
     h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">';
+    // Format time — handles Date objects, ISO strings, and "3:45 PM" strings from Sheets
+    const _fmtTime = (t) => {
+      if(!t) return '';
+      try {
+        // If it's already a clean time string like "3:45 PM", return as-is
+        if(typeof t === 'string' && /^\d{1,2}:\d{2}/.test(t)) return t;
+        // Parse as date (works for ISO strings and Date objects serialized to string)
+        const s = String(t);
+        // Extract time from ISO or Date.toString() formats
+        const isoMatch = s.match(/T(\d{2}:\d{2})/);
+        if(isoMatch) {
+          // UTC time from ISO — convert to local
+          const d = new Date(s);
+          if(!isNaN(d.getTime())) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
+        }
+        // Date.toString() format: "Thu Dec 30 1899 15:40:00 GMT-0500"
+        const timeMatch = s.match(/(\d{1,2}:\d{2}:\d{2})/);
+        if(timeMatch) {
+          const [h,m] = timeMatch[1].split(':').map(Number);
+          const ampm = h>=12?'PM':'AM';
+          const h12 = h%12||12;
+          return h12+':'+(m<10?'0':'')+m+' '+ampm;
+        }
+      } catch(e) {}
+      return '';
+    };
     if(_pkVwc!==null){
       h += '<div><div style="font-size:8px;color:var(--text3)">Day peak</div>';
       h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">'+_pkVwc.toFixed(1)+'%</div>';
-      if(pm.dayPeakTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.dayPeakTime+'</div>';
+      const _pt = _fmtTime(pm.dayPeakTime);
+      if(_pt) h += '<div style="font-size:8px;color:var(--text3)">'+_pt+'</div>';
       h += '</div>';
     }
     if(_loVwc!==null){
       h += '<div><div style="font-size:8px;color:var(--text3)">Day low</div>';
       h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">'+_loVwc.toFixed(1)+'%</div>';
-      if(pm.dayLowTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.dayLowTime+'</div>';
+      const _lt = _fmtTime(pm.dayLowTime);
+      if(_lt) h += '<div style="font-size:8px;color:var(--text3)">'+_lt+'</div>';
       h += '</div>';
     }
     if(_ovDb!==null){
-      const _ovHint = _ovDb<8 ? 'too wet — −1 event' : _ovDb>15 ? 'too dry — +1 event' : '10–14% ✓';
+      const _ovHint = _ovDb<0 ? 'getting wetter overnight — check last shot timing' : _ovDb<8 ? 'shallow — consider −1 event or earlier last shot' : _ovDb>15 ? 'too deep — consider +1 event or later last shot' : '10–14% ✓';
       h += '<div><div style="font-size:8px;color:var(--text3)">Overnight DB</div>';
       h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_ovCol+'">'+_ovDb.toFixed(1)+'%</div>';
       h += '<div style="font-size:8px;color:var(--text3)">'+_ovHint+'</div></div>';
@@ -5986,6 +6015,7 @@ async function refreshRoomScore(roomId){
 
 function closeRoomModal(){
   document.getElementById('room-detail-bg').style.display='none';
+  window._currentModalRoomId = null;
 }
 
 // INIT
