@@ -496,6 +496,41 @@ button { cursor: pointer; }
 
     <!-- MOTHER ROTATION SUB-PAGE -->
     <div id="clone-sub-mothers" style="display:none">
+
+      <!-- ═══════════════════════════════════════════════════════
+           PERPETUAL HARVEST SYSTEM — 10-week conveyor
+           Flip every Sunday · Harvest every Wednesday
+      ═══════════════════════════════════════════════════════ -->
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">Perpetual Harvest System · v1.0</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">10-room conveyor · Flip Sunday · Harvest Wednesday</div>
+          </div>
+          <div style="font-size:10px;color:var(--text3);text-align:right">
+            <span style="background:var(--green-bg);color:var(--green);padding:2px 8px;border-radius:var(--r);font-weight:600">66-day flower</span>
+            <span style="background:var(--blue-bg);color:var(--blue);padding:2px 8px;border-radius:var(--r);font-weight:600;margin-left:4px">70-day cycle</span>
+          </div>
+        </div>
+        <!-- Weekly rhythm -->
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:12px">
+          ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>{
+            const isFlip = i===0;
+            const isHarvest = i===3;
+            const isReset = i===4||i===5;
+            const isWork = i===1||i===2;
+            return `<div style="text-align:center;padding:8px 4px;border-radius:var(--r);
+              background:${isFlip?'var(--amber-bg)':isHarvest?'var(--red-bg)':isReset?'var(--blue-bg)':isWork?'var(--bg2)':'var(--bg2)'};
+              border:1px solid ${isFlip?'var(--amber-dim)':isHarvest?'var(--red-dim)':isReset?'var(--blue-dim)':'var(--border)'}">
+              <div style="font-size:9px;font-weight:700;color:${isFlip?'var(--amber)':isHarvest?'var(--red)':isReset?'var(--blue)':'var(--text3)'}">${d}</div>
+              <div style="font-size:9px;color:${isFlip?'var(--amber)':isHarvest?'var(--red)':isReset?'var(--blue)':'var(--text3)'};margin-top:2px">${isFlip?'🔄 FLIP':isHarvest?'✂️ HARVEST':isReset?'🔧 Reset':isWork?'🌿 Plant work':'Rest'}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <!-- 10-week conveyor view -->
+        <div id="perpetual-conveyor" style="overflow-x:auto"></div>
+      </div>
+
       <div class="row mb12">
         <div class="section-title">Mother rotation</div>
         <div style="flex:1"></div>
@@ -1952,8 +1987,86 @@ function retireMotherGen(id){const g=motherGens.find(g=>g.id===id);if(g){g.retir
 function deleteMotherGen(id){motherGens=motherGens.filter(g=>g.id!==id);S('wg_mother_gens',motherGens);renderMotherRotation();}
 function markGenRun(id){const g=motherGens.find(g=>g.id===id);if(g){g.runsSupplied=(g.runsSupplied||0)+1;S('wg_mother_gens',motherGens);renderMotherRotation();}}
 
+function renderPerpetualConveyor(){
+  const el = document.getElementById('perpetual-conveyor');
+  if(!el) return;
+
+  // Build 10-week schedule from today
+  // System: Flip every Sunday, Harvest every Wednesday (66 days later = Day 66)
+  // Find next Sunday flip and next Wednesday harvest
+  const today = TODAY;
+  const dow = today.getDay(); // 0=Sun
+
+  // Next Sunday (or today if Sunday)
+  const daysToSun = dow===0 ? 0 : 7-dow;
+  const nextFlip = addDays(today, daysToSun);
+
+  // Build schedule: show upcoming flips and harvests for 10 weeks
+  const weeks = [];
+  for(let w=0; w<12; w++){
+    const flipDate = addDays(nextFlip, w*7);
+    // Harvest = 66 days after flip (Day 66)
+    const harvestDate = addDays(flipDate, 65);
+    // Adjust harvest: if Sat push to Mon, if Sun push to Mon
+    let adjHarvest = harvestDate;
+    const hd = adjHarvest.getDay();
+    if(hd===6) adjHarvest = addDays(adjHarvest, 2); // Sat → Mon
+    else if(hd===0) adjHarvest = addDays(adjHarvest, 1); // Sun → Mon
+
+    // Find which room is scheduled for this flip slot
+    const flipStr = dateToIso(flipDate);
+    const matchRoom = rooms.filter(r=>r.tier!=='Support').find(r=>{
+      const d = calcDates(r);
+      if(!d.flip) return false;
+      return dateToIso(d.flip) === flipStr || Math.abs(diffDays(d.flip, flipDate)) <= 3;
+    });
+
+    // Days until flip
+    const daysUntil = diffDays(today, flipDate);
+    const isPast = daysUntil < -3;
+    const isCurrent = Math.abs(daysUntil) <= 3;
+    const harvestDaysUntil = diffDays(today, adjHarvest);
+    const harvestPast = harvestDaysUntil < 0;
+
+    weeks.push({w, flipDate, adjHarvest, matchRoom, daysUntil, isPast, isCurrent, harvestDaysUntil, harvestPast,
+      flipAdj: hd===6||hd===0 ? '(adj)' : ''});
+  }
+
+  // Render as a compact table
+  let html = '<div style="font-size:10px;color:var(--text3);margin-bottom:8px">Next 12 weeks — rooms R1+R2 count as one slot</div>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  html += '<tr style="border-bottom:1px solid var(--border)">';
+  html += '<th style="padding:4px 8px;text-align:left;color:var(--text3);font-weight:600">Week</th>';
+  html += '<th style="padding:4px 8px;text-align:left;color:var(--amber);font-weight:600">🔄 Flip (Sun)</th>';
+  html += '<th style="padding:4px 8px;text-align:left;color:var(--text3);font-weight:600">Room</th>';
+  html += '<th style="padding:4px 8px;text-align:left;color:var(--red);font-weight:600">✂️ Harvest (Wed)</th>';
+  html += '<th style="padding:4px 8px;text-align:left;color:var(--text3);font-weight:600">Clone cut deadline</th>';
+  html += '</tr>';
+
+  weeks.forEach(({w, flipDate, adjHarvest, matchRoom, daysUntil, isPast, isCurrent, harvestDaysUntil, harvestPast, flipAdj}) => {
+    // Clone cut = 12 weeks before flip (84 days) — mothers need 8wk + 4wk clone pipeline
+    const cloneCut = addDays(flipDate, -84);
+    const cloneCutDays = diffDays(today, cloneCut);
+    const cloneCutLate = cloneCutDays < 0;
+    const cloneCutSoon = cloneCutDays >= 0 && cloneCutDays <= 14;
+    const rowBg = isCurrent ? 'var(--amber-bg)' : isPast ? 'transparent' : 'transparent';
+    const rowOpacity = isPast ? '0.4' : '1';
+    html += `<tr style="border-bottom:1px solid var(--border);background:${rowBg};opacity:${rowOpacity}">`;
+    html += `<td style="padding:5px 8px;color:var(--text3);font-weight:${isCurrent?'700':'400'}">W${w+1}${isCurrent?' ◀ now':''}</td>`;
+    html += `<td style="padding:5px 8px;font-family:var(--mono);color:${isCurrent?'var(--amber)':'var(--text2)'};font-weight:${isCurrent?'700':'400'}">${fmtShort(flipDate)}${daysUntil===0?' (today)':daysUntil>0?' (in '+daysUntil+'d)':''}</td>`;
+    html += `<td style="padding:5px 8px;color:${matchRoom?'var(--green)':'var(--text3)'}">${matchRoom?matchRoom.name:'—'}</td>`;
+    html += `<td style="padding:5px 8px;font-family:var(--mono);color:${harvestPast?'var(--text3)':'var(--red)'};font-weight:${harvestDaysUntil>=0&&harvestDaysUntil<=7?'700':'400'}">${fmtShort(adjHarvest)}${flipAdj?' '+flipAdj:''}${harvestDaysUntil===0?' ← TODAY':harvestDaysUntil>0&&harvestDaysUntil<=7?' ('+harvestDaysUntil+'d)':''}</td>`;
+    html += `<td style="padding:5px 8px;font-family:var(--mono);color:${cloneCutLate?'var(--red)':cloneCutSoon?'var(--amber)':'var(--text3)'};font-size:10px">${fmtShort(cloneCut)}${cloneCutLate?' OVERDUE':cloneCutSoon?' SOON':''}</td>`;
+    html += '</tr>';
+  });
+  html += '</table>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:8px">Clone cut = 12 weeks before flip (8wk mother maturity + 4wk clone pipeline). Golden rules: never stack 2 rooms in one week · F1+F2 always one slot · flips drive the system.</div>';
+  el.innerHTML = html;
+}
+
 function renderMotherRotation(){
   motherGens=L('wg_mother_gens',[]);
+  renderPerpetualConveyor();
   const active=motherGens.filter(g=>!g.retired);
   const retired=motherGens.filter(g=>g.retired);
 
