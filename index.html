@@ -4658,7 +4658,7 @@ function renderMetrcMothers(){
     byStrain[strain].cloned+=parseInt(r['Cloned']||0)||0;
   });
   const clonesByStrain={};
-  metrcData.immature.forEach(r=>{const s=r['Strain']||r['StrainName']||'';clonesByStrain[s]=(clonesByStrain[s]||0)+(parseInt(r['Plants']||0)||0);});
+  metrcData.immature.forEach(r=>{const s=r['Strain']||r['StrainName']||r['Strain Name']||'';const p=parseInt(r['Plants']||r['Plant Count']||r['PlantCount']||r['# Plants']||r['Count']||0)||0;clonesByStrain[s]=(clonesByStrain[s]||0)+p;});
   const _mq=(document.getElementById('metrc-mother-search')?.value||'').toLowerCase().trim();
   const strains=Object.keys(byStrain).filter(s=>!_mq||s.toLowerCase().includes(_mq)).sort((a,b)=>a.localeCompare(b));
   if(countEl) countEl.textContent=(strains.length!==Object.keys(byStrain).length?strains.length+' of '+Object.keys(byStrain).length:strains.length)+' strains \u00b7 '+rows.length+' mothers';
