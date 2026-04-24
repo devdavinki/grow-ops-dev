@@ -4440,26 +4440,49 @@ async function parseMetrcXLSX(file){
 }
 
 function parseMetrcCSV(text){
-  const lines=text.trim().split(/\r?\n/);
+  // Strip BOM if present (Excel/Windows adds this)
+  if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+  const lines=text.split(/\r?\n/).filter(l=>l.length>0);
   if(!lines.length)return[];
-  // Auto-detect delimiter — METRC exports as CSV or TSV depending on browser/OS
-  const firstLine=lines[0];
-  const tabCount=firstLine.split('\t').length-1;
-  const commaCount=firstLine.split(',').length-1;
-  const delim=tabCount>commaCount?'\t':',';
-  const splitLine=(line)=>{
-    if(delim==='\t') return line.split('\t').map(v=>v.replace(/^"|"$/g,'').trim());
+
+  // Quote-aware split: treat `delim` as separator only when NOT inside a "quoted" cell.
+  // Same logic works for tab or comma — we just parameterize the separator char.
+  const splitLine=(line,delim)=>{
     const vals=[];let cur='';let inQ=false;
-    for(const ch of line){if(ch==='"'){inQ=!inQ;}else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}
-    vals.push(cur.trim());
-    return vals.map(v=>v.replace(/^"|"$/g,''));
+    for(const ch of line){
+      if(ch==='"'){inQ=!inQ;continue;}
+      if(ch===delim&&!inQ){vals.push(cur);cur='';continue;}
+      cur+=ch;
+    }
+    vals.push(cur);
+    return vals.map(v=>v.trim().replace(/^"|"$/g,''));
   };
-  const headers=splitLine(firstLine);
-  return lines.slice(1).map(line=>{
-    const vals=splitLine(line);
-    const row={};headers.forEach((h,i)=>row[h]=(vals[i]||'').trim());
+
+  // Delimiter detection: sample up to the first 5 lines. Whichever delimiter
+  // produces the most consistent column count across rows wins.
+  // This beats header-only detection because some files have commas only in
+  // values, or tabs only inside quoted cells, etc.
+  const sample=lines.slice(0,Math.min(5,lines.length));
+  const score=(delim)=>{
+    const counts=sample.map(l=>splitLine(l,delim).length);
+    const first=counts[0];
+    if(first<2) return 0; // need at least 2 columns
+    const consistent=counts.every(c=>c===first);
+    return consistent?first*100:first; // reward consistency
+  };
+  const tabScore=score('\t');
+  const commaScore=score(',');
+  const delim=tabScore>=commaScore?'\t':',';
+  console.log('[METRC parser] delim='+(delim==='\t'?'TAB':'COMMA'),'tabScore='+tabScore,'commaScore='+commaScore,'firstHeader='+JSON.stringify(lines[0].slice(0,80)));
+
+  const headers=splitLine(lines[0],delim);
+  const rows=lines.slice(1).map(line=>{
+    const vals=splitLine(line,delim);
+    const row={};headers.forEach((h,i)=>row[h]=(vals[i]||''));
     return row;
   }).filter(r=>Object.values(r).some(v=>v));
+  console.log('[METRC parser] parsed',rows.length,'rows,',headers.length,'columns');
+  return rows;
 }
 
 async function handleMetrcUpload(type,input){
