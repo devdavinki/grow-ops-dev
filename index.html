@@ -1093,17 +1093,17 @@ function L(k,def){try{const v=localStorage.getItem(k);return v?JSON.parse(v):def
 function S(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 
 const DEFAULT_ROOMS=[
-  {id:'r1',name:'Room 1',tier:'Small',sqft:280,paired:true,tall:false,strain:'',launchDate:'2026-04-07',flipDate:'',note:'Relaunched 4/7'},
-  {id:'r2',name:'Room 2',tier:'Full',sqft:432,paired:true,tall:false,strain:'',launchDate:'2026-04-07',flipDate:'',note:'Paired with Room 1'},
-  {id:'r3',name:'Room 3',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-03-13',flipDate:'2026-03-25',note:''},
-  {id:'r4',name:'Room 4',tier:'Full',sqft:432,paired:false,tall:true,strain:'',launchDate:'2026-03-05',flipDate:'2026-03-23',note:''},
-  {id:'r5',name:'Room 5',tier:'Full',sqft:432,paired:false,tall:true,strain:'',launchDate:'2026-02-27',flipDate:'2026-03-05',note:''},
-  {id:'r6',name:'Room 6',tier:'Small',sqft:324,paired:false,tall:false,strain:'',launchDate:'2026-02-08',flipDate:'2026-02-08',note:''},
-  {id:'r7',name:'Room 7',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-03-17',flipDate:'2026-03-30',note:''},
-  {id:'r8',name:'Room 8',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-04-02',flipDate:'2026-04-12',note:'Flipped 4/12'},
-  {id:'r9',name:'Room 9',tier:'Small',sqft:324,paired:false,tall:false,strain:'',launchDate:'2026-02-24',flipDate:'2026-03-03',note:''},
-  {id:'r10',name:'Room 10',tier:'Full',sqft:416,paired:false,tall:false,strain:'',launchDate:'2026-02-06',flipDate:'2026-02-06',note:''},
-  {id:'r11',name:'Room 11',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-02-19',flipDate:'2026-02-19',note:''},
+  {id:'r1',tankNumber:5,name:'Room 1',tier:'Small',sqft:280,paired:true,tall:false,strain:'',launchDate:'2026-04-07',flipDate:'',note:'Relaunched 4/7'},
+  {id:'r2',tankNumber:4,name:'Room 2',tier:'Full',sqft:432,paired:true,tall:false,strain:'',launchDate:'2026-04-07',flipDate:'',note:'Paired with Room 1'},
+  {id:'r3',tankNumber:3,name:'Room 3',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-03-13',flipDate:'2026-03-25',note:''},
+  {id:'r4',tankNumber:2,name:'Room 4',tier:'Full',sqft:432,paired:false,tall:true,strain:'',launchDate:'2026-03-05',flipDate:'2026-03-23',note:''},
+  {id:'r5',tankNumber:1,name:'Room 5',tier:'Full',sqft:432,paired:false,tall:true,strain:'',launchDate:'2026-02-27',flipDate:'2026-03-05',note:''},
+  {id:'r6',tankNumber:9,name:'Room 6',tier:'Small',sqft:324,paired:false,tall:false,strain:'',launchDate:'2026-02-08',flipDate:'2026-02-08',note:''},
+  {id:'r7',tankNumber:8,name:'Room 7',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-03-17',flipDate:'2026-03-30',note:''},
+  {id:'r8',tankNumber:7,name:'Room 8',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-04-02',flipDate:'2026-04-12',note:'Flipped 4/12'},
+  {id:'r9',tankNumber:6,name:'Room 9',tier:'Small',sqft:324,paired:false,tall:false,strain:'',launchDate:'2026-02-24',flipDate:'2026-03-03',note:''},
+  {id:'r10',tankNumber:11,name:'Room 10',tier:'Full',sqft:416,paired:false,tall:false,strain:'',launchDate:'2026-02-06',flipDate:'2026-02-06',note:''},
+  {id:'r11',tankNumber:10,name:'Room 11',tier:'Full',sqft:432,paired:false,tall:false,strain:'',launchDate:'2026-02-19',flipDate:'2026-02-19',note:''},
 ];
 
 let rooms = L('wg_rooms_v2', DEFAULT_ROOMS);
@@ -1431,7 +1431,7 @@ function renderRooms(){
     card.innerHTML=`
       <div class="card-head">
         <div>
-          <div class="room-name">${room.name}</div>
+          <div class="room-name">${room.name}${room.tankNumber?` <span style="font-size:10px;font-weight:400;color:var(--text3)">· T${room.tankNumber}</span>`:''}</div>
           <div class="room-meta">${room.tier} · ${room.sqft} sq ft${room.strain?' · '+room.strain:''}</div>
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${badges.join('')}</div>
@@ -3171,6 +3171,8 @@ function renderSettings(){
       <input type="date" value="${room.launchDate||''}" onchange="rooms[${i}].launchDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
       <label>Flip date (day 1 of flower)</label>
       <input type="date" value="${room.flipDate||''}" onchange="rooms[${i}].flipDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
+      <label>Rythm Tank #</label>
+      <input type="number" value="${room.tankNumber||''}" placeholder="e.g. 7" onchange="rooms[${i}].tankNumber=parseInt(this.value)||null;S('wg_rooms_v2',rooms);renderRooms()" style="width:80px"/>
       <label>Note</label>
       <input value="${room.note||''}" placeholder="e.g. Harvested Fri" onchange="rooms[${i}].note=this.value;S('wg_rooms_v2',rooms)"/>
       ${d.harvestDate?`<div class="calc-row">
@@ -5426,7 +5428,8 @@ function openRoomModal(room) {
   document.getElementById('rdm-name').textContent = roomName;
   document.getElementById('rdm-meta').textContent =
     [room.tier!=='Support'?room.tier:null, room.sqft&&room.sqft!=='—'?room.sqft+' sq ft':null,
-     room.strain||null, fd?'Day '+fd:null].filter(Boolean).join(' · ');
+     room.strain||null, fd?'Day '+fd:null,
+     room.tankNumber?'Tank '+room.tankNumber:null].filter(Boolean).join(' · ');
 
   const scoreEl=document.getElementById('rdm-score-section');
   const phaseEl=document.getElementById('rdm-phase-section');
