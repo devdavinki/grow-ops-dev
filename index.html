@@ -1113,7 +1113,7 @@ button { cursor: pointer; }
 // DATA
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
-const APP_VERSION = '3.2'; // True dryback display: sign flip, money-zone bands, rate %/hr, modal integration
+const APP_VERSION = '3.3'; // Probe metrics parser merges V1+V2 rows correctly
 const CYCLE = 66; const FLOWER_DAYS = 64; const DARK_DAYS = 2;
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
@@ -5836,7 +5836,14 @@ function openRoomModal(room) {
       const pos = String(row[col('probe')]||''); // e.g. T1F, T1B, T2F etc
       if(!rid||!pos) return;
       if(!pm[rid]) pm[rid]={};
-      // V2 schema fields take precedence over V1 if present
+      // GL_ProbeMetrics may contain BOTH V1 (calculateProbeMetrics) and V2
+      // (calculateProbeMetricsV2) rows for the same probe on the same day.
+      // V1 rows have day_peak_vwc, day_low_vwc, overnight_dryback_pct populated but
+      // empty V2 fields. V2 rows have the V2 fields populated. We MERGE rather than
+      // overwrite so each probe ends up with the best available value per field.
+      const _hasNonEmpty = v => v !== '' && v !== null && v !== undefined;
+      const _existing = pm[rid][pos] || {};
+      const _grab = (newVal, oldVal) => _hasNonEmpty(newVal) ? newVal : oldVal;
       const _v2OvPts   = col('overnight_dryback_pts')>=0 ? row[col('overnight_dryback_pts')] : '';
       const _v2YPeak   = col('yesterday_peak_vwc')>=0    ? row[col('yesterday_peak_vwc')]    : '';
       const _v2YPeakT  = col('yesterday_peak_time')>=0   ? row[col('yesterday_peak_time')]   : '';
@@ -5844,20 +5851,21 @@ function openRoomModal(room) {
       const _v2MLowT   = col('morning_low_time')>=0      ? row[col('morning_low_time')]      : '';
       const _v2NoProg  = col('no_program')>=0            ? row[col('no_program')]            : '';
       pm[rid][pos]={
-        dayPeakVwc:  row[col('day_peak_vwc')],
-        dayPeakTime: row[col('day_peak_time')],
-        dayLowVwc:   row[col('day_low_vwc')],
-        dayLowTime:  row[col('day_low_time')],
-        overnightDb: row[col('overnight_dryback_pct')],   // legacy (V1) — kept for fallback
-        avgBetween:  row[col('avg_between_event_dryback')],
-        eventCount:  row[col('irrigation_event_count')],
+        dayPeakVwc:  _grab(row[col('day_peak_vwc')],            _existing.dayPeakVwc),
+        dayPeakTime: _grab(row[col('day_peak_time')],           _existing.dayPeakTime),
+        dayLowVwc:   _grab(row[col('day_low_vwc')],             _existing.dayLowVwc),
+        dayLowTime:  _grab(row[col('day_low_time')],            _existing.dayLowTime),
+        overnightDb: _grab(row[col('overnight_dryback_pct')],   _existing.overnightDb),
+        avgBetween:  _grab(row[col('avg_between_event_dryback')], _existing.avgBetween),
+        eventCount:  _grab(row[col('irrigation_event_count')],  _existing.eventCount),
         // V2 fields
-        ovPts:       _v2OvPts,
-        yPeak:       _v2YPeak,
-        yPeakTime:   _v2YPeakT,
-        mLow:        _v2MLow,
-        mLowTime:    _v2MLowT,
-        noProgram:   _v2NoProg === true || String(_v2NoProg).toLowerCase()==='true',
+        ovPts:       _grab(_v2OvPts,   _existing.ovPts),
+        yPeak:       _grab(_v2YPeak,   _existing.yPeak),
+        yPeakTime:   _grab(_v2YPeakT,  _existing.yPeakTime),
+        mLow:        _grab(_v2MLow,    _existing.mLow),
+        mLowTime:    _grab(_v2MLowT,   _existing.mLowTime),
+        // noProgram is a boolean — true wins (means V2 explicitly flagged no schedule)
+        noProgram:   (_v2NoProg === true || String(_v2NoProg).toLowerCase()==='true') || _existing.noProgram === true,
       };
     });
     return pm;
