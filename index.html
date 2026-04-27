@@ -1113,7 +1113,7 @@ button { cursor: pointer; }
 // DATA
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
-const APP_VERSION = '3.1'; // Overnight DB v2 + perf scores hidden pending refinement
+const APP_VERSION = '3.2'; // True dryback display: sign flip, money-zone bands, rate %/hr, modal integration
 const CYCLE = 66; const FLOWER_DAYS = 64; const DARK_DAYS = 2;
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
@@ -2726,24 +2726,64 @@ function renderMorningAttention(){
           </span>
           ${p.peak != null ? `<span style="font-size:10px;color:var(--text3)">pk ${p.peak.toFixed(1)}%</span>` : ''}
           ${(() => {
-            // V2 overnight DB: straight points, with yesterday peak + morning low context.
-            // Color thresholds in points (not %) — adjusted approx 1:1 with prior % thresholds for typical VWC ranges.
+            // V2 overnight dryback (true dryback per facility framework):
+            //   - peak = highest VWC after last shot yesterday (post-equilibration)
+            //   - low  = lowest VWC in 90 min before today's first shot
+            //   - dryback % = peak − low (straight points, expressed as %)
+            // Sign convention: POSITIVE = substrate dried back (normal). NEGATIVE = gained moisture (rare).
+            // Bands: <8% over-supported, 8-18% money zone, 18-22% deep, >22% under-supported.
+            // Hard rule: morning low < 30% triggers channeling-risk red regardless of dryback %.
             if(p.noProgram) {
               return `<span style="font-size:10px;color:var(--text3);border-left:1px solid var(--border2);padding-left:10px;margin-left:2px">— · no program · check Growlink</span>`;
             }
             if(p.overnightDbPts == null) return '';
-            // Threshold: points (1 pt VWC ~= 1.5% of typical 65% peak) — keep similar bands
-            const dbCol = p.overnightDbPts<0?'var(--blue)':p.overnightDbPts<5?'var(--amber)':p.overnightDbPts<=15?'var(--green)':'var(--red)';
-            const dbLabel = p.overnightDbPts<0?' wetter overnight':p.overnightDbPts<5?' shallow':p.overnightDbPts<=15?' ✓':' too deep';
+            const ovDb = p.overnightDbPts; // peak − low; positive = dried back
+            const channelRisk = p.morningLow != null && p.morningLow < 30;
+            // Color + label bands
+            let dbCol, dbLabel;
+            if(channelRisk) {
+              dbCol = 'var(--red)'; dbLabel = ' channeling risk · low <30%';
+            } else if(ovDb < 0) {
+              dbCol = 'var(--blue)'; dbLabel = ' wetter overnight';
+            } else if(ovDb < 8) {
+              dbCol = 'var(--amber)'; dbLabel = ' over-supported';
+            } else if(ovDb <= 18) {
+              dbCol = 'var(--green)'; dbLabel = ' money zone ✓';
+            } else if(ovDb <= 22) {
+              dbCol = 'var(--amber)'; dbLabel = ' deep';
+            } else {
+              dbCol = 'var(--red)'; dbLabel = ' under-supported';
+            }
+            // Daily dryback rate %/hr — needs both timestamps to parse to clock hours
+            const parseClock = t => {
+              if(!t) return null;
+              const m = String(t).match(/^(\d{1,2}):(\d{2})\s*([AP]M)?$/i);
+              if(!m) return null;
+              let h = parseInt(m[1]);
+              const mn = parseInt(m[2]);
+              const ap = (m[3]||'').toUpperCase();
+              if(ap==='PM' && h<12) h+=12;
+              if(ap==='AM' && h===12) h=0;
+              return h + mn/60;
+            };
+            const peakH = parseClock(p.yesterdayPeakTime);
+            const lowH  = parseClock(p.morningLowTime);
+            let rate = null;
+            if(peakH != null && lowH != null) {
+              // peak is yesterday, low is today — hours = (24 - peakH) + lowH
+              const hrs = (24 - peakH) + lowH;
+              if(hrs > 0) rate = ovDb / hrs;
+            }
             // Still-dropping detector: current VWC at or below the stored morning low
             const stillDropping = p.morningLow != null && p.vwc != null && p.vwc <= p.morningLow + 0.2;
             const ctxBits = [];
-            if(p.yesterdayPeak != null) ctxBits.push('peak ' + p.yesterdayPeak.toFixed(1) + (p.yesterdayPeakTime ? ' ' + p.yesterdayPeakTime : ''));
-            if(p.morningLow != null) ctxBits.push('low ' + p.morningLow.toFixed(1) + (p.morningLowTime ? ' ' + p.morningLowTime : ''));
+            if(p.yesterdayPeak != null) ctxBits.push('peak ' + p.yesterdayPeak.toFixed(1) + '%' + (p.yesterdayPeakTime ? ' ' + p.yesterdayPeakTime : ''));
+            if(p.morningLow != null) ctxBits.push('low ' + p.morningLow.toFixed(1) + '%' + (p.morningLowTime ? ' ' + p.morningLowTime : ''));
+            if(rate != null) ctxBits.push(rate.toFixed(2) + '%/hr');
             const ctx = ctxBits.length ? `<div style="font-size:9px;color:var(--text3);margin-top:1px;font-family:var(--mono)">${ctxBits.join(' · ')}${stillDropping ? ' · <span style="color:var(--blue)">still dropping</span>' : ''}</div>` : '';
             return `<span style="font-size:11px;font-family:var(--mono);border-left:1px solid var(--border2);padding-left:10px;margin-left:2px">
               <span style="color:var(--text3)">Overnight </span>
-              <span style="font-weight:700;color:${isDone?'var(--text3)':dbCol}">${(p.overnightDbPts>=0?'-':'+')}${Math.abs(p.overnightDbPts).toFixed(1)} pts</span>
+              <span style="font-weight:700;color:${isDone?'var(--text3)':dbCol}">${ovDb>=0?'':'-'}${Math.abs(ovDb).toFixed(1)}%</span>
               <span style="font-size:9px;color:var(--text3)">${dbLabel}</span>
               ${ctx}
             </span>`;
@@ -5796,14 +5836,28 @@ function openRoomModal(room) {
       const pos = String(row[col('probe')]||''); // e.g. T1F, T1B, T2F etc
       if(!rid||!pos) return;
       if(!pm[rid]) pm[rid]={};
+      // V2 schema fields take precedence over V1 if present
+      const _v2OvPts   = col('overnight_dryback_pts')>=0 ? row[col('overnight_dryback_pts')] : '';
+      const _v2YPeak   = col('yesterday_peak_vwc')>=0    ? row[col('yesterday_peak_vwc')]    : '';
+      const _v2YPeakT  = col('yesterday_peak_time')>=0   ? row[col('yesterday_peak_time')]   : '';
+      const _v2MLow    = col('morning_low_vwc')>=0       ? row[col('morning_low_vwc')]       : '';
+      const _v2MLowT   = col('morning_low_time')>=0      ? row[col('morning_low_time')]      : '';
+      const _v2NoProg  = col('no_program')>=0            ? row[col('no_program')]            : '';
       pm[rid][pos]={
         dayPeakVwc:  row[col('day_peak_vwc')],
         dayPeakTime: row[col('day_peak_time')],
         dayLowVwc:   row[col('day_low_vwc')],
         dayLowTime:  row[col('day_low_time')],
-        overnightDb: row[col('overnight_dryback_pct')],
+        overnightDb: row[col('overnight_dryback_pct')],   // legacy (V1) — kept for fallback
         avgBetween:  row[col('avg_between_event_dryback')],
         eventCount:  row[col('irrigation_event_count')],
+        // V2 fields
+        ovPts:       _v2OvPts,
+        yPeak:       _v2YPeak,
+        yPeakTime:   _v2YPeakT,
+        mLow:        _v2MLow,
+        mLowTime:    _v2MLowT,
+        noProgram:   _v2NoProg === true || String(_v2NoProg).toLowerCase()==='true',
       };
     });
     return pm;
@@ -5905,10 +5959,14 @@ function openRoomModal(room) {
       h += '</div>';
     }
     if(_ovDb!==null){
-      const _ovHint = _ovDb<0 ? 'getting wetter overnight — check last shot timing' : _ovDb<8 ? 'shallow — consider −1 event or earlier last shot' : _ovDb>15 ? 'too deep — consider +1 event or later last shot' : '10–14% ✓';
-      h += '<div><div style="font-size:8px;color:var(--text3)">Overnight DB</div>';
-      h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_ovCol+'">'+_ovDb.toFixed(1)+'%</div>';
-      h += '<div style="font-size:8px;color:var(--text3)">'+_ovHint+'</div></div>';
+      // Legacy V1 overnight DB display kept ONLY when V2 is not available
+      const _hasV2 = pm.ovPts !== '' && pm.ovPts != null;
+      if(!_hasV2) {
+        const _ovHint = _ovDb<0 ? 'getting wetter overnight — check last shot timing' : _ovDb<8 ? 'shallow — consider −1 event or earlier last shot' : _ovDb>15 ? 'too deep — consider +1 event or later last shot' : '10–14% ✓';
+        h += '<div><div style="font-size:8px;color:var(--text3)">Overnight DB</div>';
+        h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_ovCol+'">'+_ovDb.toFixed(1)+'%</div>';
+        h += '<div style="font-size:8px;color:var(--text3)">'+_ovHint+'</div></div>';
+      }
     }
     if(_avgBt!==null){
       const _label = 'Avg bet. shots' + (_evCt!==null ? ' ('+_evCt+')' : '');
@@ -5916,6 +5974,80 @@ function openRoomModal(room) {
       h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_avgCol+'">'+_avgBt.toFixed(1)+'%</div></div>';
     }
     h += '</div>';
+
+    // ─── V2 OVERNIGHT (true dryback) — new section below the today grid ───
+    // Shown when V2 data is present; gives the operator the "real" overnight number.
+    const _v2Pts   = (pm.ovPts !== '' && pm.ovPts != null) ? parseFloat(pm.ovPts) : null;
+    const _v2YPk   = (pm.yPeak !== '' && pm.yPeak != null) ? parseFloat(pm.yPeak) : null;
+    const _v2MLo   = (pm.mLow  !== '' && pm.mLow  != null) ? parseFloat(pm.mLow)  : null;
+    const _v2NP    = pm.noProgram === true;
+    if(_v2NP) {
+      h += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">';
+      h += '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Overnight</div>';
+      h += '<div style="font-size:10px;color:var(--text3)">— · no program · check Growlink</div>';
+      h += '</div>';
+    } else if(_v2Pts !== null) {
+      const channelRisk = _v2MLo !== null && _v2MLo < 30;
+      let v2Col, v2Label;
+      if(channelRisk)        { v2Col='var(--red)';   v2Label='channeling risk · low <30%'; }
+      else if(_v2Pts < 0)    { v2Col='var(--blue)';  v2Label='wetter overnight'; }
+      else if(_v2Pts < 8)    { v2Col='var(--amber)'; v2Label='over-supported'; }
+      else if(_v2Pts <= 18)  { v2Col='var(--green)'; v2Label='money zone ✓'; }
+      else if(_v2Pts <= 22)  { v2Col='var(--amber)'; v2Label='deep'; }
+      else                   { v2Col='var(--red)';   v2Label='under-supported'; }
+      // Rate %/hr
+      const parseClock = t => {
+        if(!t) return null;
+        const m = String(t).match(/^(\d{1,2}):(\d{2})\s*([AP]M)?$/i);
+        if(!m) return null;
+        let h = parseInt(m[1]);
+        const mn = parseInt(m[2]);
+        const ap = (m[3]||'').toUpperCase();
+        if(ap==='PM' && h<12) h+=12;
+        if(ap==='AM' && h===12) h=0;
+        return h + mn/60;
+      };
+      const _peakH = parseClock(pm.yPeakTime);
+      const _lowH  = parseClock(pm.mLowTime);
+      let _rate = null;
+      if(_peakH != null && _lowH != null) {
+        const hrs = (24 - _peakH) + _lowH;
+        if(hrs > 0) _rate = _v2Pts / hrs;
+      }
+      h += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">';
+      h += '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Overnight</div>';
+      h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">';
+      // Headline drop %
+      h += '<div><div style="font-size:8px;color:var(--text3)">Drop</div>';
+      h += '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:'+v2Col+'">'+(_v2Pts>=0?'':'-')+Math.abs(_v2Pts).toFixed(1)+'%</div>';
+      h += '<div style="font-size:8px;color:'+v2Col+'">'+v2Label+'</div></div>';
+      // Rate
+      if(_rate !== null) {
+        h += '<div><div style="font-size:8px;color:var(--text3)">Rate</div>';
+        h += '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">'+_rate.toFixed(2)+'%/hr</div>';
+        h += '<div style="font-size:8px;color:var(--text3)">avg overnight pull</div></div>';
+      }
+      h += '</div>';
+      // Peak / low summary
+      if(_v2YPk !== null || _v2MLo !== null) {
+        h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:5px">';
+        if(_v2YPk !== null) {
+          h += '<div><div style="font-size:8px;color:var(--text3)">Last shot peak</div>';
+          h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">'+_v2YPk.toFixed(1)+'%</div>';
+          if(pm.yPeakTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.yPeakTime+'</div>';
+          h += '</div>';
+        }
+        if(_v2MLo !== null) {
+          const _mLoCol = _v2MLo < 30 ? 'var(--red)' : 'var(--text)';
+          h += '<div><div style="font-size:8px;color:var(--text3)">Pre-shot low</div>';
+          h += '<div style="font-family:var(--mono);font-size:11px;font-weight:600;color:'+_mLoCol+'">'+_v2MLo.toFixed(1)+'%</div>';
+          if(pm.mLowTime) h += '<div style="font-size:8px;color:var(--text3)">'+pm.mLowTime+'</div>';
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+      h += '</div>';
+    }
     return h;
   }
 
