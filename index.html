@@ -411,6 +411,7 @@ button { cursor: pointer; }
   <button class="nav-tab" onclick="showPage('clonetracker')" data-page="clonetracker" data-roles="lead,cloner">Clone Tracker</button>
   <button class="nav-tab" onclick="showPage('metrc')" data-page="metrc" data-roles="lead,cloner,postprod">METRC Data</button>
   <button class="nav-tab" onclick="showPage('today-log')" data-page="today-log" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Today's Log</button>
+  <button class="nav-tab" onclick="showPage('calendar')" data-page="calendar" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Calendar</button>
   <button class="nav-tab" onclick="showPage('additive')" data-page="additive" data-roles="lead,fertigator">Additive Schedule</button>
   <button class="nav-tab" onclick="showPage('checks')" data-page="checks" data-roles="lead,checker,ipm">Room Checks</button>
   <button class="nav-tab" onclick="showPage('slack')" data-page="slack" data-roles="lead">Slack Dispatch</button>
@@ -620,7 +621,40 @@ button { cursor: pointer; }
   </div>
 
   <!-- ══ PAGE: ADDITIVE SCHEDULE ══ -->
-  <div id="page-additive" class="page">
+  <div id="page-calendar" class="page">
+    <div style="max-width:760px;margin:0 auto;padding:14px 12px 30px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div style="font-size:18px;font-weight:700;color:var(--text)">Calendar</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Auto events from rooms data + your own additions</div>
+        </div>
+        <button onclick="renderCalendar()" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer">↻ Refresh</button>
+      </div>
+
+      <!-- Lead-only editor, hidden for non-leads via inline check -->
+      <div id="cal-edit-section" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:18px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Recurring reminders <span style="font-weight:400;font-size:11px;color:var(--text3)">— fires for every flowering room when it hits the day</span></div>
+        <div id="cal-rules-list" style="margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="cal-rule-day" type="number" min="1" max="80" placeholder="Day" style="width:70px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--text);font-size:13px"/>
+          <input id="cal-rule-label" placeholder="What happens that day" style="flex:1;min-width:160px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--text);font-size:13px"/>
+          <button onclick="addCalendarRule()" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--green-dim);background:var(--green-bg);color:var(--green);cursor:pointer;font-weight:600">+ Add</button>
+        </div>
+
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 10px">One-time events</div>
+        <div id="cal-events-list" style="margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="cal-event-date" type="date" style="padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--text);font-size:13px"/>
+          <input id="cal-event-label" placeholder="Event title" style="flex:1;min-width:160px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--text);font-size:13px"/>
+          <button onclick="addCalendarEvent()" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--green-dim);background:var(--green-bg);color:var(--green);cursor:pointer;font-weight:600">+ Add</button>
+        </div>
+      </div>
+
+      <!-- Agenda — read-only for everyone -->
+      <div id="cal-agenda"></div>
+    </div>
+  </div>
+    <div id="page-additive" class="page">
     <div class="row mb12">
       <div class="section-title">Resin OS additive schedule</div>
       <span class="tag tag-amber">Tier 2 · #flower-rooms only</span>
@@ -1089,6 +1123,20 @@ button { cursor: pointer; }
   </div>
 </div>
 
+<!-- TABLE SHOTS MODAL — irrigation events + per-shot VWC response per table -->
+<div id="table-shots-bg" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:250;overflow-y:auto;-webkit-overflow-scrolling:touch;" onclick="if(event.target===this)closeTableShotsModal()">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);width:calc(100% - 32px);max-width:680px;margin:16px auto 40px;box-shadow:var(--shadow-md)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--bg3);border-radius:var(--r2) var(--r2) 0 0">
+      <div>
+        <div id="tsm-title" style="font-size:16px;font-weight:700;color:var(--text)"></div>
+        <div id="tsm-subtitle" style="font-size:11px;color:var(--text3);margin-top:2px"></div>
+      </div>
+      <button onclick="closeTableShotsModal()" style="background:none;border:1px solid var(--border);color:var(--text3);font-size:12px;cursor:pointer;padding:5px 12px;border-radius:var(--r)">✕ Close</button>
+    </div>
+    <div id="tsm-body" style="padding:14px 16px"></div>
+  </div>
+</div>
+
 <div id="login-modal-bg" style="display:none;align-items:center;justify-content:center;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;padding:16px;overflow-y:auto">
   <div class="modal" style="max-width:380px;width:100%;box-shadow:var(--shadow-md);max-height:90vh;overflow-y:auto">
     <div style="text-align:center;margin-bottom:16px">
@@ -1113,7 +1161,7 @@ button { cursor: pointer; }
 // DATA
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
-const APP_VERSION = '3.3'; // Probe metrics parser merges V1+V2 rows correctly
+const APP_VERSION = '3.7'; // Per-table shot detection backend; remove saturated badge
 const CYCLE = 66; const FLOWER_DAYS = 64; const DARK_DAYS = 2;
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
@@ -1282,13 +1330,13 @@ function getAdditiveForRoom(room){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'], roomView:'full'},
-  defoliator: {pages:['assignments','rooms','today-log'], roomView:'defol'},
-  fertigator: {pages:['assignments','rooms','clonetracker','today-log','additive','checks','slack','metrc','supplies'], roomView:'basic'},
-  cloner:     {pages:['assignments','rooms','clonetracker','today-log','metrc'], roomView:'basic'},
-  ipm:        {pages:['assignments','rooms','today-log','checks','additive'], roomView:'basic'},
-  checker:    {pages:['assignments','today-log','checks'], roomView:'none'},
-  postprod:   {pages:['assignments','postprod','today-log','metrc'], roomView:'none'},
+  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'], roomView:'full'},
+  defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
+  fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','additive','checks','slack','metrc','supplies'], roomView:'basic'},
+  cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
+  ipm:        {pages:['assignments','rooms','today-log','calendar','checks','additive'], roomView:'basic'},
+  checker:    {pages:['assignments','today-log','calendar','checks'], roomView:'none'},
+  postprod:   {pages:['assignments','postprod','today-log','calendar','metrc'], roomView:'none'},
 };
 // Which METRC subtabs each role can see
 const METRC_ROLE_TABS = {
@@ -3212,13 +3260,35 @@ function applyRolePerms(){
 function addTeamMember(){
   team.push({id:'u'+Date.now(),name:'',role:'defoliator',agtId:''});
   S('wg_team',team);
+  S('wg_team_edited_at',Date.now());
+  pushConfigDebounced();
   renderTeamRoster();
 }
 
 function removeTeamMember(id){
   team=team.filter(m=>m.id!==id);
   S('wg_team',team);
+  S('wg_team_edited_at',Date.now());
+  pushConfigDebounced();
   renderTeamRoster();
+}
+
+// Setting a NEW launchDate (different from current) signals the start of a new
+// cycle. Clear flipDate explicitly with null so the clear propagates to all devices.
+// (Empty string is treated as "stale/missing" by the merge — null means "intentionally cleared".)
+function setRoomLaunchDate(i, newValue){
+  const r = rooms[i];
+  if(!r) return;
+  const prev = r.launchDate || '';
+  r.launchDate = newValue || '';
+  // If the lead changed launch to a new value, this is a new cycle. Clear flipDate.
+  if(newValue && newValue !== prev){
+    r.flipDate = null;
+  }
+  S('wg_rooms_v2', rooms);
+  S('wg_rooms_edited_at', Date.now());
+  renderRooms();
+  pushConfigDebounced();
 }
 
 function renderTeamRoster(){
@@ -3234,13 +3304,13 @@ function renderTeamRoster(){
         <button onclick="removeTeamMember('${member.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
       </div>
       <label>Name</label>
-      <input value="${member.name||''}" placeholder="Full name" onchange="team[${i}].name=this.value;S('wg_team',team);renderTeamRoster()"/>
+      <input value="${member.name||''}" placeholder="Full name" onchange="team[${i}].name=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced();renderTeamRoster()"/>
       <label>Role</label>
-      <select onchange="team[${i}].role=this.value;S('wg_team',team);renderTeamRoster()">
+      <select onchange="team[${i}].role=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced();renderTeamRoster()">
         ${Object.entries(ROLE_LABELS).map(([r,l])=>`<option value="${r}"${r===member.role?' selected':''}>${l}</option>`).join('')}
       </select>
       <label>AGT employee ID (leave blank to skip verification)</label>
-      <input type="password" maxlength="10" value="${member.agtId||''}" placeholder="######" onchange="team[${i}].agtId=this.value;S('wg_team',team)" style="letter-spacing:.15em"/>
+      <input type="password" maxlength="10" value="${member.agtId||''}" placeholder="######" onchange="team[${i}].agtId=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced()" style="letter-spacing:.15em"/>
     `;
     grid.appendChild(cell);
   });
@@ -3419,7 +3489,7 @@ function renderSettings(){
       <label>Strain</label>
       <input value="${room.strain||''}" placeholder="Strain name" onchange="rooms[${i}].strain=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
       <label>Launch date (plants in)</label>
-      <input type="date" value="${room.launchDate||''}" onchange="rooms[${i}].launchDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
+      <input type="date" value="${room.launchDate||''}" onchange="setRoomLaunchDate(${i},this.value)"/>
       <label>Flip date (day 1 of flower)</label>
       <input type="date" value="${room.flipDate||''}" onchange="rooms[${i}].flipDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
       <label>Rythm Tank #</label>
@@ -3869,6 +3939,7 @@ function showPage(page){
   if(page==='slack') renderSlackPanels();
   if(page==='assignments') renderAssignments();
   if(page==='today-log') renderTodayLog();
+  if(page==='calendar'){ pullConfigFromCloud(true).then(()=>renderCalendar()).catch(()=>renderCalendar()); }
   if(page==='checks'){
     pullRoomChecksFromCloud(true).then(()=>{renderTodayCheckSubmissions();renderRooms();}).catch(()=>{});
     // Initialize date field and today's submissions on tab open
@@ -5907,7 +5978,12 @@ function openRoomModal(room) {
             const pm2 = _probeMetrics[key];
             if(!pm2) return;
             const metricsEl = el.querySelector('.probe-metrics-section');
-            if(metricsEl) metricsEl.innerHTML = _buildProbeMetricsHtml(pm2);
+            if(metricsEl) {
+              // Reveal the section if it was hidden at first render (when _probeMetrics
+              // was still loading). Apply the same styles as the populated state.
+              metricsEl.style.cssText = 'background:var(--bg2);border-radius:var(--r);padding:6px 8px;border:1px solid var(--border)';
+              metricsEl.innerHTML = _buildProbeMetricsHtml(pm2);
+            }
           });
         }
       }).catch(e=>{ console.log('[ProbeMetrics] fetch error:', e); });
@@ -5923,7 +5999,13 @@ function openRoomModal(room) {
     const _evCt  = (pm.eventCount   !== '' && pm.eventCount   != null) ? parseInt(pm.eventCount)     : null;
     const _ovCol  = _ovDb!=null  ? (_ovDb>15?'var(--red)':_ovDb<8?'var(--amber)':'var(--green)') : 'var(--text3)';
     const _avgCol = _avgBt!=null ? (_avgBt>15?'var(--red)':_avgBt<3?'var(--amber)':'var(--green)') : 'var(--text3)';
-    if(_pkVwc===null && _loVwc===null && _ovDb===null && _avgBt===null) return '';
+    // Check V2 presence too — V2 rows may have empty V1 fields but valid V2 data.
+    // Without this, a V2-only row would bail out below before the V2 section renders.
+    const _hasAnyV2 = (pm.ovPts !== '' && pm.ovPts != null)
+                  || (pm.yPeak !== '' && pm.yPeak != null)
+                  || (pm.mLow  !== '' && pm.mLow  != null)
+                  || pm.noProgram === true;
+    if(_pkVwc===null && _loVwc===null && _ovDb===null && _avgBt===null && !_hasAnyV2) return '';
     let h = '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:5px">Dryback metrics · today</div>';
     h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">';
     // Format time — handles Date objects, ISO strings, and "3:45 PM" strings from Sheets
@@ -6106,9 +6188,10 @@ function openRoomModal(room) {
         <span style="font-size:9px;font-weight:400">VWC ${tVWC[0]}–${tVWC[1]}% · EC ${tEC[0]}–${tEC[1]}</span>
       </div>
       ${Object.keys(tables).sort().map(tNum=>`
-        <div style="margin-bottom:10px">
-          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:5px">
-            Table ${tNum} <span style="font-size:10px;font-weight:400;color:var(--text3)">· ${tNum==='1'?'Right side':tNum===String(tableCount)?'Left side':'Center'}</span>
+        <div onclick='openTableShotsModal(${JSON.stringify(_roomIdForMetrics||"")},${JSON.stringify(roomName||"")},${tNum})' style="margin-bottom:10px;cursor:pointer" title="Tap to see irrigation history">
+          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;user-select:none">
+            <span>Table ${tNum} <span style="font-size:10px;font-weight:400;color:var(--text3)">· ${tNum==='1'?'Right side':tNum===String(tableCount)?'Left side':'Center'}</span></span>
+            <span style="font-size:10px;color:var(--blue);font-weight:600">View shots →</span>
           </div>
           <div style="display:flex;gap:6px">
             ${probeCard(tables[tNum].F,'Front','',tNum)}
@@ -6384,6 +6467,214 @@ async function refreshRoomScore(roomId){
 
 
 
+// ══════════════════════════════════════════════════════════════════
+// TABLE SHOTS MODAL — per-table irrigation event history with VWC response
+// Clicked from inside the room detail modal. Layered on top.
+// Shows last 2 days of fired shots (from GL_IrrigationEvents) with the
+// peak Front and Back VWC in the 0-15 min window after each shot
+// (from GL_History).
+// ══════════════════════════════════════════════════════════════════
+async function openTableShotsModal(roomId, roomName, tableNum){
+  // Stop event from bubbling to room modal close
+  if(typeof event!=='undefined' && event && event.stopPropagation) event.stopPropagation();
+  if(!roomId){ console.warn('[TableShots] no roomId'); return; }
+  const modal = document.getElementById('table-shots-bg');
+  const body  = document.getElementById('tsm-body');
+  document.getElementById('tsm-title').textContent = (roomName||'Room')+' · Table '+tableNum;
+  const setStatus = (msg) => { document.getElementById('tsm-subtitle').textContent = msg; };
+  setStatus('Fetching irrigation events…');
+  body.innerHTML = '<div id="tsm-loader" style="text-align:center;padding:32px;color:var(--text3);font-size:13px">'
+    + '<div style="margin-bottom:8px">Loading shot history…</div>'
+    + '<div id="tsm-loader-step" style="font-size:11px;color:var(--text3)">Fetching irrigation events</div>'
+    + '</div>';
+  modal.style.display = 'block';
+  const setStep = (msg) => {
+    const el = document.getElementById('tsm-loader-step');
+    if(el) el.textContent = msg;
+  };
+
+  try {
+    const u = gsUrl;
+    // Server-side filter: only this room, only the last 49 hours of GL_History
+    // (matches the 49h window pullIrrigationEvents uses, so events line up)
+    const sinceISO = new Date(Date.now() - 49*60*60*1000).toISOString();
+    const evUrl = u+'?action=getSheet&sheet=GL_IrrigationEvents&room='+encodeURIComponent(roomId);
+    const hsUrl = u+'?action=getSheet&sheet=GL_History&room='+encodeURIComponent(roomId)
+                + '&since='+encodeURIComponent(sinceISO);
+
+    const [evRes, hsRes] = await Promise.all([
+      fetch(evUrl).then(r=>r.json()),
+      fetch(hsUrl).then(r=>r.json()),
+    ]);
+    if(!evRes.ok || !hsRes.ok){ body.innerHTML='<div style="text-align:center;padding:32px;color:var(--red);font-size:13px">Failed to load data.</div>'; return; }
+    setStep('Computing peak VWC per shot…');
+    // Yield to the browser so the status text actually paints before render starts
+    await new Promise(r => setTimeout(r, 0));
+    renderTableShots(roomId, roomName, tableNum, evRes.rows, hsRes.rows);
+  } catch(e){
+    console.error('[TableShots] fetch error', e);
+    body.innerHTML='<div style="text-align:center;padding:32px;color:var(--red);font-size:13px">Error loading data: '+e+'</div>';
+  }
+}
+
+function closeTableShotsModal(){
+  document.getElementById('table-shots-bg').style.display='none';
+}
+
+function renderTableShots(roomId, roomName, tableNum, eventsRows, historyRows){
+  const body = document.getElementById('tsm-body');
+
+  // Parse events for this room/table
+  const evHdr = eventsRows[0].map(h=>String(h).toLowerCase().trim());
+  const evC = n => evHdr.indexOf(n);
+  const tsI = evC('timestamp'), rmI = evC('room_id'), tnI = evC('table_number');
+  const flagI = evC('flag'), durI = evC('duration_sec'), manI = evC('is_manual');
+  const events = eventsRows.slice(1)
+    .filter(r => String(r[rmI])===roomId && parseInt(r[tnI])===tableNum)
+    .map(r => ({
+      ts: new Date(r[tsI]),
+      tsRaw: String(r[tsI]),
+      flag: flagI>=0 ? String(r[flagI]||'') : '',
+      durSec: durI>=0 ? r[durI] : '',
+      isManual: manI>=0 ? (r[manI]===true || String(r[manI]).toLowerCase()==='true') : false,
+    }))
+    .filter(e => !isNaN(e.ts.getTime()))
+    .sort((a,b)=>b.ts-a.ts); // newest first
+
+  if(!events.length){
+    body.innerHTML='<div style="text-align:center;padding:32px;color:var(--text3);font-size:13px">No irrigation events for this table in the last 2 days.</div>';
+    document.getElementById('tsm-subtitle').textContent='No events';
+    return;
+  }
+
+  // Parse history rows for this room — need t<N>f_vwc and t<N>b_vwc per timestamp
+  const hsHdr = historyRows[0].map(h=>String(h).toLowerCase().trim());
+  const hsC = n => hsHdr.indexOf(n);
+  const hTsI = hsC('timestamp'), hRmI = hsC('room_id');
+  const fI = hsC('t'+tableNum+'f_vwc'), bI = hsC('t'+tableNum+'b_vwc');
+  const hist = historyRows.slice(1)
+    .filter(r => String(r[hRmI])===roomId)
+    .map(r => ({
+      ts: new Date(r[hTsI]),
+      f: (fI>=0 && r[fI]!=='' && r[fI]!==null) ? parseFloat(r[fI]) : null,
+      b: (bI>=0 && r[bI]!=='' && r[bI]!==null) ? parseFloat(r[bI]) : null,
+    }))
+    .filter(h => !isNaN(h.ts.getTime()))
+    .sort((a,b)=>a.ts-b.ts);
+
+  // For each event, find peak F and peak B in [event.ts, event.ts + 15 min]
+  events.forEach(e => {
+    const winEndMs = e.ts.getTime() + 15*60*1000;
+    let pkF = null, pkB = null;
+    for(let i=0;i<hist.length;i++){
+      const t = hist[i].ts.getTime();
+      if(t < e.ts.getTime()) continue;
+      if(t > winEndMs) break;
+      if(hist[i].f!==null && (pkF===null || hist[i].f>pkF)) pkF = hist[i].f;
+      if(hist[i].b!==null && (pkB===null || hist[i].b>pkB)) pkB = hist[i].b;
+    }
+    e.peakF = pkF;
+    e.peakB = pkB;
+  });
+
+  // Group by day-key in local time (yesterday vs today, with "today" being the current operating day starting at the latest rampStart)
+  // Simple: group by local calendar date for now. Two days max.
+  const fmtLocalDate = d => {
+    const local = new Date(d.getTime() - 5*3600000); // CDT shift baked in for grouping; the format uses UTC-5
+    return local.toISOString().split('T')[0];
+  };
+  const fmtTime = d => {
+    const utcH = d.getUTCHours();
+    const utcM = d.getUTCMinutes();
+    let localH = (utcH - 5 + 24) % 24;
+    const ampm = localH >= 12 ? 'PM' : 'AM';
+    const h12 = localH % 12 || 12;
+    const mm = String(utcM).padStart(2,'0');
+    return h12+':'+mm+' '+ampm;
+  };
+  const fmtDayLabel = dateStr => {
+    // dateStr is YYYY-MM-DD (local). Compare to today's local date.
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 5, 0, 0)); // 5h UTC = midnight CDT
+    const todayKey = new Date(today.getTime() - 5*3600000).toISOString().split('T')[0];
+    if(dateStr === todayKey) return 'Today';
+    const yest = new Date(today.getTime() - 86400000);
+    const yestKey = new Date(yest.getTime() - 5*3600000).toISOString().split('T')[0];
+    if(dateStr === yestKey) return 'Yesterday';
+    return dateStr;
+  };
+
+  // Group
+  const groups = {};
+  events.forEach(e => {
+    const key = fmtLocalDate(e.ts);
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(e);
+  });
+  // Keep top 2 days
+  const dayKeys = Object.keys(groups).sort().reverse().slice(0,2);
+
+  // Manual override warning
+  const recentManual = events.filter(e => e.isManual && (Date.now()-e.ts.getTime()) < 25*3600000).length;
+  let banner = '';
+  if(recentManual > 0){
+    banner = `<div style="background:rgba(245,158,11,0.15);border:1px solid var(--amber);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--text)">
+      ⚠ <b>Manual override detected</b> — ${recentManual} of the last events fired with manual control on. Auto-schedule may be disabled. Verify in Growlink.
+    </div>`;
+  }
+
+  // Anomaly summary
+  const anomalies = events.filter(e => e.flag).length;
+  let anomalyNote = '';
+  if(anomalies > 0){
+    anomalyNote = ` · ${anomalies} flagged`;
+  }
+
+  document.getElementById('tsm-subtitle').textContent = events.length+' shots in last 2 days'+anomalyNote;
+
+  // Build table HTML
+  let html = banner;
+  dayKeys.forEach(dayKey => {
+    const dayEvts = groups[dayKey];
+    const totalShots = dayEvts.length;
+    html += `<div style="margin-bottom:18px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between">
+        <span>${fmtDayLabel(dayKey)}</span>
+        <span style="font-weight:400">${totalShots} shot${totalShots===1?'':'s'}</span>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+        <div style="display:grid;grid-template-columns:74px 1fr 1fr 50px 50px;gap:0;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;padding:8px 12px;background:var(--bg3);border-bottom:1px solid var(--border)">
+          <div>Time</div>
+          <div>Front peak</div>
+          <div>Back peak</div>
+          <div style="text-align:right">Dur</div>
+          <div style="text-align:right">Flag</div>
+        </div>
+    `;
+    dayEvts.forEach(e => {
+      const fStr = e.peakF!==null ? e.peakF.toFixed(1)+'%' : '—';
+      const bStr = e.peakB!==null ? e.peakB.toFixed(1)+'%' : '—';
+      const durStr = e.durSec!=='' && e.durSec!==null ? e.durSec+'s' : '—';
+      let flagBadge = '';
+      if(e.isManual) flagBadge += '<span title="MAN — manual override. Someone fired this shot through the Growlink app instead of the auto schedule." onclick="event.stopPropagation();alert(\'MAN — manual override. Someone fired this shot through the Growlink app instead of the auto schedule.\')" style="display:inline-block;padding:1px 5px;font-size:9px;border-radius:3px;background:rgba(245,158,11,0.2);color:var(--amber);font-weight:700;cursor:help">MAN</span> ';
+      if(e.flag === 'unpaired') flagBadge += '<span title="UNPAIR — this ON event has no matching OFF in the data. Either the valve is still open, the OFF is past the 49h window, or Growlink missed logging it." onclick="event.stopPropagation();alert(\'UNPAIR — no matching OFF event found. The valve may still be open, the OFF may be past our 49h data window, or Growlink missed logging it. Recent shots near the top of the list are usually pending.\')" style="display:inline-block;padding:1px 5px;font-size:9px;border-radius:3px;background:rgba(239,68,68,0.2);color:var(--red);font-weight:700;cursor:help">UNPAIR</span>';
+      else if(e.flag === 'next_on') flagBadge += '<span title="DUP — duplicate ON. Two ON events in a row with no OFF between them. Usually controller noise; persistent occurrences suggest a relay issue." onclick="event.stopPropagation();alert(\'DUP — duplicate ON. Two ON events fired in a row without an OFF between them. Usually controller noise. Multiple DUPs on the same table can indicate a relay issue worth investigating.\')" style="display:inline-block;padding:1px 5px;font-size:9px;border-radius:3px;background:rgba(239,68,68,0.2);color:var(--red);font-weight:700;cursor:help">DUP</span>';
+      else if(e.flag === 'long') flagBadge += '<span title="LONG — duration over 10 minutes. Either the valve was stuck open or Growlink missed the OFF event. Worth a physical check if it repeats." onclick="event.stopPropagation();alert(\'LONG — duration was over 10 minutes. Real shots are 30-66 seconds. Either the valve was stuck physically open or Growlink missed logging the OFF event. Persistent LONGs on one table warrant a physical valve check.\')" style="display:inline-block;padding:1px 5px;font-size:9px;border-radius:3px;background:rgba(239,68,68,0.2);color:var(--red);font-weight:700;cursor:help">LONG</span>';
+      if(!flagBadge) flagBadge = '<span style="color:var(--text3);font-size:10px">—</span>';
+      html += `<div style="display:grid;grid-template-columns:74px 1fr 1fr 50px 50px;gap:0;font-size:12px;color:var(--text);padding:7px 12px;border-bottom:1px solid var(--border);align-items:center">
+        <div style="font-weight:600">${fmtTime(e.ts)}</div>
+        <div>${fStr}</div>
+        <div>${bStr}</div>
+        <div style="text-align:right;color:var(--text3);font-size:11px">${durStr}</div>
+        <div style="text-align:right">${flagBadge}</div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  });
+
+  body.innerHTML = html;
+}
+
 function closeRoomModal(){
   document.getElementById('room-detail-bg').style.display='none';
   window._currentModalRoomId = null;
@@ -6447,6 +6738,288 @@ setTimeout(async ()=>{
     try{ await pullGrowlinkFromCloud(true); }catch(e){}
   }catch(e){console.warn('Background pull failed:',e);}
 },1200);
+
+// ══════════════════════════════════════════════
+// CALENDAR
+// ══════════════════════════════════════════════
+// Cycle math (locked):
+//   flipDate = Monday lights change → Day 1 of flower
+//   harvest  = flipDate + 65 days = Wednesday (Day 66)
+//   relaunch = flipDate + 67 days = Friday
+//   takedown = flipDate + 81 days = Friday (16 days after harvest)
+//   day-X    = flipDate + (X-1) days
+// r1 + r2 are paired — same flip/harvest/relaunch/takedown dates
+// Stored: calendarRules (recurring per-cycle reminders),
+//         calendarEvents (manual one-time events).
+// Auto events (harvest/takedown/relaunch from flipDate) are computed live, never stored.
+
+let calendarRules  = L('wg_cal_rules',  []);
+let calendarEvents = L('wg_cal_events', []);
+
+const PAIRED_ROOMS = [['r1','r2']];
+
+function _pairLabel(roomId){
+  const room = rooms.find(r => r.id === roomId);
+  if(!room) return roomId;
+  for(const pair of PAIRED_ROOMS){
+    if(pair.includes(roomId)){
+      const partners = pair.map(pid => rooms.find(r => r.id === pid)).filter(Boolean);
+      if(partners.length > 1) return partners.map(r => r.name).join(' + ');
+    }
+  }
+  return room.name;
+}
+
+function _isPairedFollower(roomId){
+  // For paired rooms, only emit one event per pair using the first room as anchor.
+  for(const pair of PAIRED_ROOMS){
+    if(pair.includes(roomId) && pair[0] !== roomId) return true;
+  }
+  return false;
+}
+
+function addDaysIso(isoDate, days){
+  const d = new Date(isoDate + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function dateLabelRelative(isoDate){
+  // Returns "Today", "Tomorrow", "in 3d", "Yesterday", "3d ago"
+  const today = dateToIso(TODAY);
+  const t  = new Date(today + 'T12:00:00').getTime();
+  const d  = new Date(isoDate + 'T12:00:00').getTime();
+  const diff = Math.round((d - t) / 86400000);
+  if(diff === 0) return 'Today';
+  if(diff === 1) return 'Tomorrow';
+  if(diff === -1) return 'Yesterday';
+  if(diff > 0) return 'in ' + diff + 'd';
+  return Math.abs(diff) + 'd ago';
+}
+
+function dateLabelAbsolute(isoDate){
+  // "Wed Apr 29"
+  const d = new Date(isoDate + 'T12:00:00');
+  const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  return wd + ' ' + mo + ' ' + d.getDate();
+}
+
+function computeAutoEvents(){
+  // For each room with a flipDate, emit harvest/relaunch/takedown.
+  // For each calendarRule + each flowering room, emit a per-cycle reminder.
+  // Skip paired-follower rooms so r1+r2 only emits one combined event.
+  const out = [];
+  rooms.forEach(r => {
+    if(!r.flipDate) return;
+    if(_isPairedFollower(r.id)) return;
+    const flip = r.flipDate; // ISO yyyy-mm-dd, the Monday flip day
+    const label = _pairLabel(r.id);
+    out.push({ date: addDaysIso(flip, 65), kind:'harvest',  label: label + ' harvest' });
+    out.push({ date: addDaysIso(flip, 67), kind:'relaunch', label: label + ' relaunch' });
+    out.push({ date: addDaysIso(flip, 81), kind:'takedown', label: label + ' takedown' });
+    // Per-cycle reminders — fire on flip + (X-1) days where X is dayOfFlower
+    calendarRules.forEach(rule => {
+      const day = parseInt(rule.dayOfFlower);
+      if(!day || day < 1 || day > 90) return;
+      out.push({
+        date: addDaysIso(flip, day - 1),
+        kind: 'reminder',
+        label: label + ' day ' + day + ' — ' + (rule.label || ''),
+      });
+    });
+  });
+  return out;
+}
+
+function computeAllCalendarEvents(){
+  // Combine auto + manual into a single sorted list
+  const auto = computeAutoEvents();
+  const manual = (calendarEvents || []).map(e => ({
+    date: e.date,
+    kind: 'manual',
+    label: e.label,
+    id: e.id, // keep id so the lead can delete
+  }));
+  const all = [...auto, ...manual];
+  all.sort((a,b) => a.date.localeCompare(b.date));
+  return all;
+}
+
+function _kindBadge(kind){
+  const map = {
+    harvest:  {bg:'rgba(245,158,11,0.18)', fg:'var(--amber)', text:'HARVEST'},
+    relaunch: {bg:'rgba(34,197,94,0.18)',  fg:'var(--green)', text:'RELAUNCH'},
+    takedown: {bg:'rgba(168,85,247,0.18)', fg:'var(--purple)',text:'TAKEDOWN'},
+    reminder: {bg:'rgba(59,130,246,0.18)', fg:'var(--blue)',  text:'REMINDER'},
+    manual:   {bg:'var(--bg3)',            fg:'var(--text2)', text:'EVENT'},
+  };
+  const m = map[kind] || map.manual;
+  return '<span style="display:inline-block;padding:1px 6px;font-size:9px;border-radius:3px;background:'+m.bg+';color:'+m.fg+';font-weight:700;letter-spacing:.04em">'+m.text+'</span>';
+}
+
+function renderCalendar(){
+  // Editor visibility — leads only
+  const editSection = document.getElementById('cal-edit-section');
+  if(editSection){
+    editSection.style.display = (loggedInMember && loggedInMember.role === 'lead') ? 'block' : 'none';
+  }
+
+  // Render rules list
+  const rulesEl = document.getElementById('cal-rules-list');
+  if(rulesEl){
+    if(!calendarRules.length){
+      rulesEl.innerHTML = '<div style="font-size:11px;color:var(--text3);font-style:italic;padding:6px 0">No recurring reminders yet.</div>';
+    } else {
+      rulesEl.innerHTML = calendarRules.map(r => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--blue);min-width:48px">Day ${r.dayOfFlower}</div>
+          <div style="flex:1;font-size:13px;color:var(--text)">${r.label || ''}</div>
+          <button onclick="deleteCalendarRule('${r.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
+        </div>
+      `).join('');
+    }
+  }
+
+  // Render manual events list (lead-editable)
+  const eventsEl = document.getElementById('cal-events-list');
+  if(eventsEl){
+    const sorted = (calendarEvents || []).slice().sort((a,b) => a.date.localeCompare(b.date));
+    if(!sorted.length){
+      eventsEl.innerHTML = '<div style="font-size:11px;color:var(--text3);font-style:italic;padding:6px 0">No one-time events yet.</div>';
+    } else {
+      eventsEl.innerHTML = sorted.map(e => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="font-size:11px;font-weight:600;color:var(--blue);min-width:90px">${dateLabelAbsolute(e.date)}</div>
+          <div style="flex:1;font-size:13px;color:var(--text)">${e.label}</div>
+          <button onclick="deleteCalendarEvent('${e.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
+        </div>
+      `).join('');
+    }
+  }
+
+  // Render agenda (split past/upcoming)
+  const agenda = document.getElementById('cal-agenda');
+  if(!agenda) return;
+  const all = computeAllCalendarEvents();
+  const today = dateToIso(TODAY);
+  const upcoming = all.filter(e => e.date >= today);
+  const past = all.filter(e => e.date < today)
+    .filter(e => {
+      // keep only past 14 days
+      const t = new Date(today + 'T12:00:00').getTime();
+      const d = new Date(e.date + 'T12:00:00').getTime();
+      return (t - d) / 86400000 <= 14;
+    })
+    .reverse(); // most recent first
+
+  // Group upcoming by date
+  const upGroups = {};
+  upcoming.forEach(e => {
+    if(!upGroups[e.date]) upGroups[e.date] = [];
+    upGroups[e.date].push(e);
+  });
+  const upDates = Object.keys(upGroups).sort();
+
+  let html = '';
+  // Upcoming section
+  html += '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin:8px 0 8px">Upcoming</div>';
+  if(!upDates.length){
+    html += '<div style="font-size:13px;color:var(--text3);font-style:italic;padding:14px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">Nothing scheduled.</div>';
+  } else {
+    upDates.forEach(d => {
+      html += `<div style="margin-bottom:14px">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+          <div style="font-size:14px;font-weight:700;color:var(--text)">${dateLabelAbsolute(d)}</div>
+          <div style="font-size:11px;color:var(--text3)">${dateLabelRelative(d)}</div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+          ${upGroups[d].map(e => `
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text)">
+              ${_kindBadge(e.kind)}
+              <div style="flex:1">${e.label}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    });
+  }
+
+  // Past section
+  if(past.length){
+    const pastGroups = {};
+    past.forEach(e => {
+      if(!pastGroups[e.date]) pastGroups[e.date] = [];
+      pastGroups[e.date].push(e);
+    });
+    const pastDates = Object.keys(pastGroups).sort().reverse();
+    html += '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin:24px 0 8px">Past 14 days</div>';
+    pastDates.forEach(d => {
+      html += `<div style="margin-bottom:14px;opacity:.7">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+          <div style="font-size:14px;font-weight:700;color:var(--text2)">${dateLabelAbsolute(d)}</div>
+          <div style="font-size:11px;color:var(--text3)">${dateLabelRelative(d)}</div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+          ${pastGroups[d].map(e => `
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text2)">
+              ${_kindBadge(e.kind)}
+              <div style="flex:1">${e.label}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    });
+  }
+
+  agenda.innerHTML = html;
+}
+
+function addCalendarRule(){
+  const dayInp = document.getElementById('cal-rule-day');
+  const labelInp = document.getElementById('cal-rule-label');
+  const day = parseInt(dayInp.value);
+  const label = (labelInp.value || '').trim();
+  if(!day || day < 1 || day > 90){ alert('Day must be between 1 and 90'); return; }
+  if(!label){ alert('Add a label for what happens that day'); return; }
+  calendarRules.push({ id: 'rule_'+Date.now(), dayOfFlower: day, label: label });
+  S('wg_cal_rules', calendarRules);
+  pushConfigDebounced();
+  dayInp.value = '';
+  labelInp.value = '';
+  renderCalendar();
+}
+
+function deleteCalendarRule(id){
+  if(!confirm('Remove this recurring reminder?')) return;
+  calendarRules = calendarRules.filter(r => r.id !== id);
+  S('wg_cal_rules', calendarRules);
+  pushConfigDebounced();
+  renderCalendar();
+}
+
+function addCalendarEvent(){
+  const dateInp = document.getElementById('cal-event-date');
+  const labelInp = document.getElementById('cal-event-label');
+  const date = dateInp.value;
+  const label = (labelInp.value || '').trim();
+  if(!date){ alert('Pick a date'); return; }
+  if(!label){ alert('Add a title for the event'); return; }
+  calendarEvents.push({ id: 'evt_'+Date.now(), date: date, label: label });
+  S('wg_cal_events', calendarEvents);
+  pushConfigDebounced();
+  dateInp.value = '';
+  labelInp.value = '';
+  renderCalendar();
+}
+
+function deleteCalendarEvent(id){
+  if(!confirm('Remove this event?')) return;
+  calendarEvents = calendarEvents.filter(e => e.id !== id);
+  S('wg_cal_events', calendarEvents);
+  pushConfigDebounced();
+  renderCalendar();
+}
 
 // ══════════════════════════════════════════════
 // SUPPLIES
@@ -6661,6 +7234,10 @@ async function pushConfigToCloud(silent=false){
       cloneSessions,
       dryRooms,
       alertThresholds,
+      trimQueue:L('wg_trim_queue',[]),
+      approvedTakedowns:L('wg_approved_takedowns',{}),
+      calendarRules:L('wg_cal_rules',[]),
+      calendarEvents:L('wg_cal_events',[]),
       syncedBy:loggedInMember?loggedInMember.name:'Unknown',
       syncedAt:new Date().toISOString(),
     }
@@ -6680,34 +7257,48 @@ async function pullConfigFromCloud(silent=false){
     if(!json.ok||!json.data) return false;
     const d=json.data;
 
-    // Rooms — cloud wins, but respect intentional clears.
-    // A cleared field (empty string) that was explicitly saved must not be overwritten
-    // by an older cloud value. We track the cloud's syncedAt timestamp vs local edit time.
+    // Rooms — cloud wins ONLY when cloud has a real value. Empty strings, nulls, and
+    // undefined never overwrite local. Once a flip/launch/strain/note is set, it persists
+    // until a real value (or another lead's real edit) explicitly replaces it.
+    // This protects against any device pushing back stale empties that wipe set values.
     if(d.rooms&&d.rooms.length){
       const cloudRooms=d.rooms;
-      // If local was saved MORE RECENTLY than cloud, local wins for any field the lead cleared
       const cloudSyncedAt=d.syncedAt?new Date(d.syncedAt).getTime():0;
       const localEditAt=L('wg_rooms_edited_at',0);
       const localIsNewer=localEditAt>cloudSyncedAt;
+      const _hasReal = v => v !== undefined && v !== null && v !== '';
+      // Per-field merge:
+      //   - cloud has real value → cloud wins (replace local)
+      //   - cloud is null → intentional clear, propagate (replace local with empty)
+      //   - cloud is '' or undefined → stale/missing, keep local
+      const _mergeField = (cloudVal, localVal) => {
+        if(_hasReal(cloudVal)) return cloudVal;        // real value wins
+        if(cloudVal === null) return '';                // explicit clear propagates
+        return localVal;                                // stale empty → keep local
+      };
       rooms=rooms.map((local,i)=>{
         const cloud=cloudRooms.find(r=>r.id===local.id);
         if(!cloud) return local;
-        // If local was edited after the cloud sync, trust local for every field
-        // (this covers intentional clears — empty string beats old cloud value)
+        // If local edit is newer than cloud sync, trust local entirely
         if(localIsNewer) return local;
-        // Otherwise cloud wins, but only replace with cloud value if cloud has something
         return{...local,
-          flipDate:   cloud.flipDate   !== undefined ? cloud.flipDate   : local.flipDate,
-          launchDate: cloud.launchDate !== undefined ? cloud.launchDate : local.launchDate,
-          strain:     cloud.strain     !== undefined ? cloud.strain     : local.strain,
-          note:       cloud.note       !== undefined ? cloud.note       : local.note,
+          flipDate:   _mergeField(cloud.flipDate,   local.flipDate),
+          launchDate: _mergeField(cloud.launchDate, local.launchDate),
+          strain:     _mergeField(cloud.strain,     local.strain),
+          note:       _mergeField(cloud.note,       local.note),
         };
       });
       S('wg_rooms_v2',rooms);
     }
 
-    // Team & role perms — cloud wins (lead manages these)
-    if(d.team&&d.team.length){ team=d.team; S('wg_team',team); }
+    // Team — symmetric with rooms: if local was edited more recently than cloud, local wins.
+    // Otherwise cloud wins. Prevents another device with a stale roster from clobbering
+    // a lead's role assignment (e.g. promoting Chris to lead).
+    if(d.team&&d.team.length){
+      const cloudSyncedAtTeam=d.syncedAt?new Date(d.syncedAt).getTime():0;
+      const localTeamEditAt=L('wg_team_edited_at',0);
+      if(localTeamEditAt<=cloudSyncedAtTeam){ team=d.team; S('wg_team',team); }
+    }
     if(d.rolePerms){ rolePerms=d.rolePerms; S('wg_role_perms',rolePerms); applyRolePerms(); }
 
     // Custom chores & tasks
@@ -6721,6 +7312,38 @@ async function pullConfigFromCloud(silent=false){
       const localOnly=local.filter(s=>!cloudIds.has(s.id));
       supplies=[...d.supplies,...localOnly];
       S('wg_supplies',supplies);
+    }
+
+    // Trim queue — cloud is authoritative for order/priority/notes/roomId.
+    // Order persists across devices: the lead reorders → push to cloud → other
+    // devices pull → see the same order. New METRC-derived items not yet in cloud
+    // (just added on this device since last push) are kept and appended.
+    if(d.trimQueue&&Array.isArray(d.trimQueue)){
+      const local=L('wg_trim_queue',[]);
+      const cloudIds=new Set(d.trimQueue.map(t=>t.id));
+      const localOnly=local.filter(t=>!cloudIds.has(t.id));
+      trimQueue=[...d.trimQueue,...localOnly];
+      S('wg_trim_queue',trimQueue);
+    }
+
+    // Approved takedowns — append-only union. Once a takedown is approved on
+    // any device, it stays approved everywhere. Cloud and local are unioned by key.
+    if(d.approvedTakedowns&&typeof d.approvedTakedowns==='object'){
+      const local=L('wg_approved_takedowns',{});
+      approvedTakedowns={...d.approvedTakedowns,...local};
+      S('wg_approved_takedowns',approvedTakedowns);
+    }
+
+    // Calendar rules + manual events — cloud is authoritative.
+    // Last-write-wins is fine here since only leads edit, and leads typically
+    // make changes one at a time. Local edits get pushed immediately via pushConfigDebounced.
+    if(d.calendarRules&&Array.isArray(d.calendarRules)){
+      calendarRules = d.calendarRules;
+      S('wg_cal_rules', calendarRules);
+    }
+    if(d.calendarEvents&&Array.isArray(d.calendarEvents)){
+      calendarEvents = d.calendarEvents;
+      S('wg_cal_events', calendarEvents);
     }
 
     // Today logs — merge per day
