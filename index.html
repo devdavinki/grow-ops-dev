@@ -1162,7 +1162,7 @@ button { cursor: pointer; }
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
 const APP_VERSION = '3.7'; // Per-table shot detection backend; remove saturated badge
-const CYCLE = 66; const FLOWER_DAYS = 64; const DARK_DAYS = 2;
+const CYCLE = 66; const FLOWER_DAYS = 65; const DARK_DAYS = 0; // No dark period — harvest = flip + 65 = Day 66
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
 
@@ -1239,12 +1239,14 @@ function calcDates(room){
   const launch=isoToDate(room.launchDate);
   const flip=isoToDate(room.flipDate);
   if(!flip)return{launch,flip:null,darkStart:null,harvestDate:null,nextLaunch:null,cloneCutDate:null};
-  const darkStart=addDays(flip,FLOWER_DAYS);
-  const harvestDate=addDays(darkStart,DARK_DAYS);
+  // Day 1 = flip (Mon). Day 66 = harvest = flip + 65 days = Wed.
+  // No dark period; nextLaunch is Thu (harvest + 1).
+  const harvestDate=addDays(flip,FLOWER_DAYS); // flip + 65
   const cleanDays=room.paired?2:1;
   const nextLaunch=addDays(harvestDate,cleanDays);
   const cloneCutDate=addDays(nextLaunch,-CLONE_LEAD);
-  return{launch,flip,darkStart,harvestDate,nextLaunch,cloneCutDate};
+  // darkStart kept null for backward-compat with any consumers expecting the field
+  return{launch,flip,darkStart:null,harvestDate,nextLaunch,cloneCutDate};
 }
 
 function flowerDay(room){
@@ -1265,8 +1267,8 @@ function getStage(room){
   if(!launch)return'empty';
   if(fd===null)return'veg';
   if(fd<1)return'veg';
+  // Day 1-49 = flower, 50-65 = late flower, 66 = harvest day
   if(fd>=1&&fd<=FLOWER_DAYS)return fd>=50?'late':'flower';
-  if(fd>FLOWER_DAYS&&fd<CYCLE)return'dark';
   return'harvest';
 }
 
@@ -1404,7 +1406,7 @@ function renderRooms(){
 
     let stageClass='stage-'+stage;
     let badgeClass='badge-'+stage;
-    let badgeText=stage==='veg'?'Veg':stage==='flower'?'Flower':stage==='late'?'Late flower':stage==='dark'?'Dark period':stage==='harvest'?'Harvest':stage==='empty'?'Empty':'—';
+    let badgeText=stage==='veg'?'Veg':stage==='flower'?'Flower':stage==='late'?'Late flower':stage==='harvest'?'Harvest':stage==='empty'?'Empty':'—';
 
     const card=document.createElement('div');
     card.className=`room-card ${stageClass}`;
@@ -1505,7 +1507,7 @@ function renderRooms(){
       const dotCls=additive.tier2?'dot-amber':'dot-gray';
       taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${additive.name}<span class="sub">${additive.dose}${additive.tier2?' · Tier 2':''}</span></div></div>`);
     }
-    if(stage==='dark') taskList.push(`<div class="task-item-sm"><span class="task-dot dot-gray"></span><div class="task-text" style="color:var(--text3)">Dark period — no entry</div></div>`);
+    // (No dark period stage anymore — Day 65 = late flower, Day 66 = harvest)
     if(stage==='harvest'&&(roomView==='full')) taskList.push(`<div class="task-item-sm"><span class="task-dot dot-red"></span><div class="task-text"><span class="alert-txt">Harvest day — authorize entry in #harvest</span></div></div>`);
     if(taskList.length) taskHTML=`<div class="task-strip"><div class="task-strip-head">Today</div>${taskList.join('')}</div>`;
 
@@ -2040,14 +2042,14 @@ function renderPerpetualConveyor(){
   if(!el) return;
 
   // Build 10-week schedule from today
-  // System: Flip every Sunday, Harvest every Wednesday (66 days later = Day 66)
-  // Find next Sunday flip and next Wednesday harvest
+  // System: Flip every Monday, Harvest every Wednesday (Day 66 = flip + 65 days)
+  // Find next Monday flip
   const today = TODAY;
-  const dow = today.getDay(); // 0=Sun
+  const dow = today.getDay(); // 0=Sun, 1=Mon
 
-  // Next Sunday (or today if Sunday)
-  const daysToSun = dow===0 ? 0 : 7-dow;
-  const nextFlip = addDays(today, daysToSun);
+  // Next Monday (or today if Monday)
+  const daysToMon = dow===1 ? 0 : (8-dow)%7;
+  const nextFlip = addDays(today, daysToMon);
 
   // Build schedule: show upcoming flips and harvests for 10 weeks
   const weeks = [];
@@ -2297,7 +2299,7 @@ function clearTodayLog(){todayLog=[];S('wg_log_'+dateToIso(TODAY),todayLog);rend
 function renderAdditiveTable(){
   const tbody=document.getElementById('additive-tbody');
   tbody.innerHTML='';
-  const phases={1:'Week 1',8:'Week 2',15:'Week 3',22:'Week 4',29:'Week 5',36:'Week 6',43:'Week 7',50:'X1 phase',57:'Late flower',64:'Dark period'};
+  const phases={1:'Week 1',8:'Week 2',15:'Week 3',22:'Week 4',29:'Week 5',36:'Week 6',43:'Week 7',50:'X1 phase',57:'Late flower'};
   for(let d=1;d<=CYCLE;d++){
     const ad=ADDITIVES[d]||null;
     const fd=rooms.map(r=>flowerDay(r)).find(fd=>fd===d);
@@ -2307,14 +2309,14 @@ function renderAdditiveTable(){
     const tr=document.createElement('tr');
     if(isToday) tr.className='today-row';
     else if(ad?.tier2) tr.className='tier2-row';
-    if(d>=64&&d<=65) tr.style.opacity='0.5';
+    // (no day-range opacity dimming — every day shown normally)
     tr.innerHTML=`
       <td style="font-family:var(--mono);font-weight:600">D${d}${isToday?` <span class="tag tag-green" style="font-size:9px">today</span>`:''}${d===CYCLE?` <span class="tag tag-red" style="font-size:9px">harvest</span>`:''}</td>
       <td style="color:var(--text3);font-size:12px">${phase}</td>
       <td>${ad?`<span class="add-pill ${ad.pill}">${ad.name}</span>`:`<span class="add-pill pill-base">Base feed only</span>`}</td>
       <td style="font-family:var(--mono);font-size:12px">${ad?.dose||'—'}</td>
-      <td>${ad?.tier2?`<span class="tag tag-amber" style="font-size:9px">#flower-rooms</span>`:d<64?`<span class="tag tag-blue" style="font-size:9px">#daily-dispatch</span>`:''}</td>
-      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d>=64&&d<=67?'Harvest prep':d===CYCLE?'Harvest day — notify #harvest':''}</td>
+      <td>${ad?.tier2?`<span class="tag tag-amber" style="font-size:9px">#flower-rooms</span>`:d<65?`<span class="tag tag-blue" style="font-size:9px">#daily-dispatch</span>`:''}</td>
+      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d>=63&&d<=65?'Harvest prep':d===CYCLE?'Harvest day — notify #harvest':''}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -3056,7 +3058,7 @@ function buildSlackMessage(role){
   if(role==='checker'){
     lines.push(`*Westside Growers — Room checks due*`);
     lines.push(`_${date}_`);lines.push('');
-    const checkRooms=rooms.filter(r=>{const s=getStage(r);return s==='flower'||s==='late'||s==='dark';});
+    const checkRooms=rooms.filter(r=>{const s=getStage(r);return s==='flower'||s==='late';});
     checkRooms.forEach(room=>{
       const fd=flowerDay(room);
       lines.push(`*${room.name}* — Day ${fd}`);
@@ -6750,7 +6752,7 @@ setTimeout(async ()=>{
 // Cycle math (locked):
 //   flipDate = Monday lights change → Day 1 of flower
 //   harvest  = flipDate + 65 days = Wednesday (Day 66)
-//   relaunch = flipDate + 67 days = Friday
+//   relaunch = flipDate + 66 days = Thursday (day after harvest Wednesday)
 //   takedown = flipDate + 81 days = Friday (16 days after harvest)
 //   day-X    = flipDate + (X-1) days
 // r1 + r2 are paired — same flip/harvest/relaunch/takedown dates
@@ -6821,7 +6823,7 @@ function computeAutoEvents(){
     const flip = r.flipDate; // ISO yyyy-mm-dd, the Monday flip day
     const label = _pairLabel(r.id);
     out.push({ date: addDaysIso(flip, 65), kind:'harvest',  label: label + ' harvest' });
-    out.push({ date: addDaysIso(flip, 67), kind:'relaunch', label: label + ' relaunch' });
+    out.push({ date: addDaysIso(flip, 66), kind:'relaunch', label: label + ' relaunch' });
     out.push({ date: addDaysIso(flip, 81), kind:'takedown', label: label + ' takedown' });
     // Per-cycle reminders — fire on flip + (X-1) days where X is dayOfFlower
     calendarRules.forEach(rule => {
