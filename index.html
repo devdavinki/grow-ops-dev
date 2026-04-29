@@ -1215,8 +1215,8 @@ const ADDITIVES={
 
 const DEFOL_WINDOWS=[
   // SOP-DEFOL-002 v2.0 — early flower only (Days 1–21)
-  {id:'dw1',label:'Phase 1 — Pre-strip',start:1,end:7,type:'phase1'},
-  {id:'dw2',label:'Phase 2 — Primary strip',start:10,end:14,type:'phase2'},
+  {id:'dw1',label:'Phase 1 — Pre-defol',start:1,end:7,type:'phase1'},
+  {id:'dw2',label:'Phase 2 — Primary defol',start:10,end:14,type:'phase2'},
   {id:'dw3',label:'Phase 3 — Final cleanup',start:18,end:20,type:'phase3'},
   {id:'dw4',label:'Phase 3 — Hard stop',start:21,end:21,type:'hardstop'},
   // Later flower windows — original SOP unchanged
@@ -1732,7 +1732,7 @@ function buildAssignments(role){
         if(rov['done_'+dt.id]||rov['skip_'+dt.id]) return;
         let desc='',sub='';
         if(dt.type==='phase1'){desc='Light cleanup only — dead or damaged lowers, weak interior shoots. No structural decisions yet. Fan leaves stay. Plant is still setting structure.';sub=`Days 1–7 · Day ${dt.daysIn} of ${dt.winLen} · ${dt.daysLeft}d remaining`;}
-        else if(dt.type==='phase2'){desc='Primary strip — remove bottom 25–40% of plant (strain dependent, confirm % with Flower Lead), interior non-light sites, larf, and fan leaves shading productive tops. This is the main architectural intervention for the cycle.';sub=`Days 10–14 · Day ${dt.daysIn} of ${dt.winLen} · ${dt.daysLeft}d remaining`;}
+        else if(dt.type==='phase2'){desc='Primary defol — remove bottom 25–40% of plant (strain dependent, confirm % with Flower Lead), interior non-light sites, larf, and fan leaves shading productive tops. This is the main architectural intervention for the cycle.';sub=`Days 10–14 · Day ${dt.daysIn} of ${dt.winLen} · ${dt.daysLeft}d remaining`;}
         else if(dt.type==='phase3'){desc='Surgical correction only — missed larf from Phase 2, tiny lowers with no stacking potential, isolated shade leaves directly blocking a productive top. Do not strip aggressively or remove large fan leaves.';sub=`Days 18–21 · Day ${dt.daysIn} of ${dt.winLen} · ${dt.daysLeft}d remaining`;}
         else if(dt.type==='hardstop'){desc='Last day for any canopy work. All intervention after today requires Cultivation Director approval and must be logged as a deviation per SOP-DEFOL-002 v2.0.';sub='HARD STOP — Day 21. No exceptions.';}
         else if(dt.type==='light'){desc='Round 2 — light defol only. Remove obvious blockers and dying material. No aggressive pulls.';sub=`Window day ${dt.daysIn} of ${dt.winLen} · ${dt.daysLeft} days remaining`;}
@@ -1801,8 +1801,8 @@ function buildAssignments(role){
     const defolWins=getDefolTasksForRoom(room);
     if(defolWins.some(d=>d.type==='hardstop')){badge='Hard stop — Day 21';badgeCls='tag-red';}
     else if(defolWins.some(d=>d.type==='phase3')){badge='Phase 3 — surgical only';badgeCls='tag-amber';}
-    else if(defolWins.some(d=>d.type==='phase2')){badge='Phase 2 — primary strip';badgeCls='tag-green';}
-    else if(defolWins.some(d=>d.type==='phase1')){badge='Phase 1 — pre-strip';badgeCls='tag-blue';}
+    else if(defolWins.some(d=>d.type==='phase2')){badge='Phase 2 — primary defol';badgeCls='tag-green';}
+    else if(defolWins.some(d=>d.type==='phase1')){badge='Phase 1 — pre-defol';badgeCls='tag-blue';}
     else if(defolWins.length){badge='Defol window';badgeCls='tag-green';}
 
     groups.push({roomId:room.id,roomName:room.name,stageLine,badge,badgeCls,tasks});
@@ -2983,8 +2983,8 @@ function buildSlackMessage(role){
       const fd=flowerDay(room);
       lines.push(`*${room.name}* (${room.tier}) — Day ${fd}`);
       tasks.forEach(dt=>{
-        if(dt.type==='phase1') lines.push(`  • Phase 1 Pre-strip (Days 1–7) — dead/damaged lowers and weak interior shoots only. No structural decisions. Fan leaves stay.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
-        else if(dt.type==='phase2') lines.push(`  • Phase 2 Primary strip (Days 10–14) — remove bottom 25–40% (confirm % with Flower Lead), interior non-light sites, larf, fan leaves shading productive tops.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
+        if(dt.type==='phase1') lines.push(`  • Phase 1 Pre-defol (Days 1–7) — dead/damaged lowers and weak interior shoots only. No structural decisions. Fan leaves stay.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
+        else if(dt.type==='phase2') lines.push(`  • Phase 2 Primary defol (Days 10–14) — remove bottom 25–40% (confirm % with Flower Lead), interior non-light sites, larf, fan leaves shading productive tops.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
         else if(dt.type==='phase3') lines.push(`  • Phase 3 Final cleanup (Days 18–21) — surgical correction only. Missed larf, tiny lowers, isolated shade leaves blocking productive tops. No large fan leaf removal.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
         else if(dt.type==='hardstop') lines.push(`  • 🔴 HARD STOP Day 21 — last day for canopy work. After today: Cultivation Director approval + deviation log required per SOP-DEFOL-002 v2.0.`);
         else if(dt.type==='light') lines.push(`  • Round 2 light defol (Days 42–49) — obvious blockers and dying material only. No aggressive pulls.${dt.daysLeft!==undefined?' '+dt.daysLeft+'d remaining':''}`);
