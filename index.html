@@ -3241,11 +3241,16 @@ if(!rolePerms || !rolePerms.lead ||
 
 function applyRolePerms(){
   if(!rolePerms) return;
-  // Always ensure new pages are present even on old cached rolePerms
+  // Always ensure new pages are present even on old cached rolePerms.
+  // Every role (including non-leads) gets calendar so the team can view it.
   const ensurePages = {
-    lead: ['assignments','rooms','postprod','clonetracker','today-log','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'],
-    fertigator: ['supplies','additive','checks','slack','clonetracker'],
-    ipm: ['additive'],
+    lead:       ['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'],
+    fertigator: ['supplies','additive','checks','slack','clonetracker','calendar'],
+    ipm:        ['additive','calendar'],
+    cloner:     ['calendar'],
+    defoliator: ['calendar'],
+    checker:    ['calendar'],
+    postprod:   ['calendar'],
   };
   Object.entries(ensurePages).forEach(([role, pages]) => {
     if(!rolePerms[role]) rolePerms[role] = [];
