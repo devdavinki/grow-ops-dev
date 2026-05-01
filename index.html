@@ -1396,6 +1396,61 @@ function setRole(role){
 // ══════════════════════════════════════════════
 // ROOMS PAGE
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// MANUAL IRRIGATION BADGE — recent manual events per room
+// Fetches GL_IrrigationEvents (filtered to last 30 min via since= param),
+// builds roomId → [tableNumber, ...] of any room/table with a manual fire.
+// Refreshes every 60 sec while Rooms tab is visible.
+// ══════════════════════════════════════════════
+let _manualByRoom = {};
+let _manualRefreshTimer = null;
+
+async function refreshManualEvents(silent=true){
+  try {
+    const sinceISO = new Date(Date.now() - 30*60*1000).toISOString();
+    const url = gsUrl + '?action=getSheet&sheet=GL_IrrigationEvents&since=' + encodeURIComponent(sinceISO);
+    const res = await fetch(url);
+    const d = await res.json();
+    if(!d.ok || !d.rows) return;
+    const hdr = d.rows[0].map(h=>String(h).toLowerCase().trim());
+    const ridI = hdr.indexOf('room_id');
+    const tnI  = hdr.indexOf('table_number');
+    const manI = hdr.indexOf('is_manual');
+    if(ridI < 0 || tnI < 0 || manI < 0) return;
+    const next = {};
+    d.rows.slice(1).forEach(row => {
+      const isMan = row[manI] === true || String(row[manI]).toLowerCase() === 'true';
+      if(!isMan) return;
+      const rid = String(row[ridI] || '');
+      const tnum = parseInt(row[tnI]);
+      if(!rid || !tnum) return;
+      if(!next[rid]) next[rid] = [];
+      if(!next[rid].includes(tnum)) next[rid].push(tnum);
+    });
+    // Sort table numbers in each list for stable display
+    Object.keys(next).forEach(k => next[k].sort((a,b)=>a-b));
+    // Detect change before re-rendering to avoid flicker
+    const before = JSON.stringify(_manualByRoom);
+    const after  = JSON.stringify(next);
+    _manualByRoom = next;
+    if(before !== after && document.getElementById('page-rooms') && document.getElementById('page-rooms').classList.contains('active')){
+      renderRooms();
+    }
+  } catch(e) {
+    if(!silent) console.warn('[manual badge] fetch error', e);
+  }
+}
+
+function startManualRefresh(){
+  if(_manualRefreshTimer) return;
+  refreshManualEvents();
+  _manualRefreshTimer = setInterval(refreshManualEvents, 60000);
+}
+
+function stopManualRefresh(){
+  if(_manualRefreshTimer){ clearInterval(_manualRefreshTimer); _manualRefreshTimer = null; }
+}
+
 function renderRooms(){
   const grid=document.getElementById('rooms-grid');
   grid.innerHTML='';
@@ -1536,7 +1591,7 @@ function renderRooms(){
     card.innerHTML=`
       <div class="card-head">
         <div>
-          <div class="room-name">${room.name}${room.tankNumber?` <span style="font-size:10px;font-weight:400;color:var(--text3)">· T${room.tankNumber}</span>`:''}</div>
+          <div class="room-name">${room.name}${(_manualByRoom[room.id]&&_manualByRoom[room.id].length)?` <span title="Manual irrigation in last 30 min" style="display:inline-block;margin-left:6px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.04em;border-radius:3px;background:rgba(245,158,11,0.18);color:var(--amber);vertical-align:middle">✋ MANUAL · table ${_manualByRoom[room.id].join(', ')}</span>`:''}</div>
           <div class="room-meta">${room.tier} · ${room.sqft} sq ft${room.strain?' · '+room.strain:''}</div>
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${badges.join('')}</div>
@@ -3983,7 +4038,7 @@ function showPage(page){
   }
   if(page==='clonetracker') renderCloneTracker();
   if(page==='assignments'){renderAssignments();renderChores();}
-  if(page==='rooms'){renderRooms();pullGrowlinkFromCloud(true);pullRoomChecksFromCloud(true).then(()=>renderRooms()).catch(()=>{});}
+  if(page==='rooms'){renderRooms();pullGrowlinkFromCloud(true);pullRoomChecksFromCloud(true).then(()=>renderRooms()).catch(()=>{});startManualRefresh();}else{stopManualRefresh();}
   if(page==='daily-review'){renderDailyReview();}
   if(page==='blueprint'){renderBlueprint();}
   if(page==='supplies'){renderSupplies();}
