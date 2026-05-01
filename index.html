@@ -886,7 +886,7 @@ button { cursor: pointer; }
     <!-- SUB-TABS -->
     <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0">
       <button class="nav-tab active" onclick="showPostTab('queue',this)" style="font-size:12px">Trim queue</button>
-      <button class="nav-tab" onclick="showPostTab('weights',this)" style="font-size:12px">Log weights</button>
+      <button class="nav-tab" onclick="showPostTab('history',this)" style="font-size:12px">Trim history</button>
       <button class="nav-tab" id="preroll-subtab-btn" onclick="showPostTab('preroll',this)" style="font-size:12px;display:none">Pre-roll priority</button>
     </div>
 
@@ -904,10 +904,10 @@ button { cursor: pointer; }
       <div id="trim-queue-list" style="margin-bottom:1.5rem"></div>
     </div>
 
-    <!-- LOG WEIGHTS -->
-    <div id="postsub-weights" style="display:none">
-      <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Enter final weights after trimming is complete for each strain.</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:1.5rem" id="weight-cards"></div>
+    <!-- TRIM HISTORY -->
+    <div id="postsub-history" style="display:none">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Approved harvests removed from the trim queue. Read-only ledger. Lead approval is the trigger to enter weights into METRC.</div>
+      <div id="trim-history-list" style="margin-bottom:1.5rem"></div>
     </div>
 
     <!-- PRE-ROLL PRIORITY -->
@@ -3736,6 +3736,7 @@ function toggleMachineTrimmed(id){
 
 function renderTrimQueue(){
   trimQueue=L('wg_trim_queue',[]);
+  trimWeights=L('wg_trim_weights',{});
   const list=document.getElementById('trim-queue-list');
   if(!list)return;
   const isLead=currentRole==='lead';
@@ -3745,81 +3746,95 @@ function renderTrimQueue(){
   // Show/hide add button
   const addBtn=document.getElementById('add-trim-btn');
   if(addBtn) addBtn.style.display=isLead?'inline-flex':'none';
-  if(!trimQueue.length){
-    list.innerHTML=`<div class="empty-state">No harvests in queue yet. Upload a Harvests export in Settings → METRC.</div>`;
+  // Active queue = items not yet archived (lead-approved into history)
+  const activeTrimQueue=trimQueue.filter(i=>!i.archived);
+  if(!activeTrimQueue.length){
+    list.innerHTML=`<div class="empty-state">No harvests in queue. Upload a Harvests export in Settings → METRC, or add manually.</div>`;
     return;
   }
   const priColor={high:'var(--red)',normal:'var(--green)',low:'var(--text3)'};
   const priLabel={high:'🔴 Trim first',normal:'Normal',low:'⬇ Low'};
-  const statusColor={pending:'var(--text3)',trimming:'var(--amber)',done:'var(--green)'};
-  const statusLabel={pending:'Pending',trimming:'Trimming now',done:'Complete'};
-  const activeTrimQueue=trimQueue.filter(i=>i.status!=='done');
-  const doneQueue=trimQueue.filter(i=>i.status==='done');
   const renderItems=(items,offset)=>items.map((item,idx)=>{
     const realIdx=trimQueue.indexOf(item);
     const w=trimWeights[item.id]||{};
-    const hasWeights=w.bigBuds||w.smallBuds||w.trim;
+    const wStatus=w.status||'entry'; // entry → submitted → (lead approved → archive)
     const dateObj=item.harvestDate?new Date(item.harvestDate):null;
     const dateStr=dateObj&&!isNaN(dateObj)?dateObj.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):item.harvestDate||'';
-    return`<div class="card" style="border-left:3px solid ${priColor[item.priority||'normal']};opacity:${item.status==='done'?'0.55':'1'};margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px">
-        ${isLead?`<div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
+    const submitted=wStatus==='submitted'||wStatus==='pending'; // 'pending' kept for backward-compat with existing data
+    const inputDisabled=submitted?'disabled':'';
+    // Border color reflects state: amber when submitted (waiting on lead), priority color otherwise
+    const borderColor=submitted?'var(--amber)':priColor[item.priority||'normal'];
+    return`<div class="card" style="border-left:3px solid ${borderColor};margin-bottom:8px">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        ${isLead?`<div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;padding-top:2px">
           <button onclick="moveTrimItem('${item.id}',-1)" ${realIdx===0?'disabled':''} style="font-size:14px;line-height:1;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:${realIdx===0?'var(--bg3)':'none'};color:${realIdx===0?'var(--border2)':'var(--text2)'};cursor:${realIdx===0?'default':'pointer'}">↑</button>
           <button onclick="moveTrimItem('${item.id}',1)" ${realIdx>=trimQueue.length-1?'disabled':''} style="font-size:14px;line-height:1;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:${realIdx>=trimQueue.length-1?'var(--bg3)':'none'};color:${realIdx>=trimQueue.length-1?'var(--border2)':'var(--text2)'};cursor:${realIdx>=trimQueue.length-1?'default':'pointer'}">↓</button>
         </div>`:''}
-        <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text3);min-width:28px;flex-shrink:0">${offset+idx+1}</div>
+        <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text3);min-width:28px;flex-shrink:0;padding-top:2px">${offset+idx+1}</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:14px;font-weight:700;color:var(--text);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.strain}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;align-items:center">
             ${item.plantCount?`<span style="font-size:11px;padding:1px 7px;background:var(--green-bg);border:1px solid var(--green-dim);border-radius:var(--r);color:var(--green);font-family:var(--mono)">${item.plantCount} plants</span>`:''}
             ${dateStr?`<span style="font-size:11px;color:var(--text3)">${dateStr}</span>`:''}
             <span style="font-size:11px;font-weight:600;color:${priColor[item.priority||'normal']}">${priLabel[item.priority||'normal']}</span>
-            <span style="font-size:11px;padding:1px 7px;border-radius:var(--r);background:var(--bg3);color:${statusColor[item.status||'pending']}">${statusLabel[item.status||'pending']}</span>
+            ${submitted?`<span style="font-size:11px;padding:1px 7px;border-radius:var(--r);background:var(--amber-bg,rgba(245,158,11,0.15));color:var(--amber);font-weight:600">⏳ Pending lead approval</span>`:''}
           </div>
           ${item.notes?`<div style="font-size:11px;color:var(--text2);margin-top:4px;padding:4px 6px;background:var(--bg3);border-radius:var(--r)">${item.notes}</div>`:''}
-          ${hasWeights?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-            ${w.bigBuds?`<span style="font-size:11px;padding:1px 7px;background:var(--green-bg);color:var(--green);border-radius:var(--r)">Bigs: ${w.bigBuds}g</span>`:''}
-            ${w.smallBuds?`<span style="font-size:11px;padding:1px 7px;background:var(--blue-bg);color:var(--blue);border-radius:var(--r)">Smalls: ${w.smallBuds}g</span>`:''}
-            ${w.trim?`<span style="font-size:11px;padding:1px 7px;background:var(--bg3);color:var(--text3);border-radius:var(--r)">Trim: ${w.trim}g</span>`:''}
-          </div>`:''}
-          ${(isLead||currentRole==='postprod')?`<div style="margin-top:8px;padding:8px 10px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
-            <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:7px">🔬 Purpl Pro</div>
-            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-              <div style="flex:1;min-width:90px">
+
+          <!-- WEIGHTS + PURPL PRO INLINE -->
+          <div style="margin-top:10px;padding:10px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
+            <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">⚖ Weights & QC</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+              <div>
+                <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Bigs (g)</div>
+                <input type="number" min="0" step="0.1" value="${w.bigBuds||''}" placeholder="0.0" ${inputDisabled}
+                  style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--mono)"
+                  onchange="saveWeight('${item.id}','bigBuds',this.value)"/>
+              </div>
+              <div>
+                <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Smalls (g)</div>
+                <input type="number" min="0" step="0.1" value="${w.smallBuds||''}" placeholder="0.0" ${inputDisabled}
+                  style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--mono)"
+                  onchange="saveWeight('${item.id}','smallBuds',this.value)"/>
+              </div>
+              <div>
+                <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Trim (g)</div>
+                <input type="number" min="0" step="0.1" value="${w.trim||''}" placeholder="0.0" ${inputDisabled}
+                  style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--mono)"
+                  onchange="saveWeight('${item.id}','trim',this.value)"/>
+              </div>
+              <div>
                 <div style="font-size:10px;color:var(--text3);margin-bottom:3px">THC %</div>
-                <input type="number" min="0" max="40" step="0.1"
-                  value="${w.purplTHC||''}" placeholder="e.g. 28.4"
+                <input type="number" min="0" max="40" step="0.1" value="${w.purplTHC||''}" placeholder="e.g. 28.4" ${inputDisabled}
                   style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--mono)"
-                  oninput="savePurplResult('${item.id}','purplTHC',this.value)"/>
+                  onchange="savePurplResult('${item.id}','purplTHC',this.value)"/>
               </div>
-              <div style="flex:1;min-width:90px">
+              <div>
                 <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Moisture %</div>
-                <input type="number" min="0" max="30" step="0.1"
-                  value="${w.moisture||''}" placeholder="e.g. 11.2"
+                <input type="number" min="0" max="30" step="0.1" value="${w.moisture||''}" placeholder="e.g. 11.2" ${inputDisabled}
                   style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--mono)"
-                  oninput="savePurplResult('${item.id}','moisture',this.value)"/>
+                  onchange="savePurplResult('${item.id}','moisture',this.value)"/>
               </div>
-              ${(w.purplTHC||w.moisture)?`<div style="display:flex;align-items:center;gap:8px;padding-bottom:2px">
-                ${w.purplTHC?`<span style="font-size:13px;font-weight:700;color:var(--purple);font-family:var(--mono)">THC ${w.purplTHC}%</span>`:''}
-                ${w.moisture?`<span style="font-size:13px;font-weight:700;color:var(--blue);font-family:var(--mono)">H₂O ${w.moisture}%</span>`:''}
-                ${w.purplEnteredBy?`<span style="font-size:10px;color:var(--text3)">· ${w.purplEnteredBy}</span>`:''}
-              </div>`:''}
             </div>
-          </div>`:''}
-          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">
-            ${item.machineTrimmed
-              ?`<span style="font-size:11px;padding:2px 8px;border-radius:var(--r);background:var(--green-bg);border:1px solid var(--green-dim);color:var(--green);font-weight:600">✓ Machine trimmed${item.machineTrimmedBy?' · '+item.machineTrimmedBy:''}</span>`
-              :(isLead||currentRole==='postprod')?`<button onclick="toggleMachineTrimmed('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--blue);background:none;color:var(--blue);cursor:pointer">🔪 Mark machine trimmed</button>`:''
-            }
-            ${item.status==='pending'?`<button onclick="markTrimInProgress('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--amber-dim);background:none;color:var(--amber);cursor:pointer">▶ Start</button>`:''}
-            ${item.status==='trimming'?`<button onclick="markTrimDone('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--green-dim);background:var(--green-bg);color:var(--green);cursor:pointer">✓ Done</button>`:''}
-            ${isLead?`<select onchange="updateTrimItemPriority('${item.id}',this.value)" style="font-size:11px;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
+            ${(w.enteredBy||w.purplEnteredBy)?`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:10px;color:var(--text3)">
+              ${w.enteredBy?`<span>Submitted by ${w.enteredBy}</span>`:''}
+              ${w.purplEnteredBy&&w.purplEnteredBy!==w.enteredBy?`<span>QC by ${w.purplEnteredBy}</span>`:''}
+            </div>`:''}
+          </div>
+
+          <!-- ACTIONS -->
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            ${!submitted?`<button onclick="submitWeightForVerification('${item.id}')" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--amber);background:none;color:var(--amber);cursor:pointer;font-weight:600">Submit for approval</button>`:''}
+            ${submitted&&isLead?`<button onclick="approveWeight('${item.id}')" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--green);background:var(--green-bg);color:var(--green);cursor:pointer;font-weight:700">✓ Approve & archive</button>`:''}
+            ${submitted&&isLead?`<button onclick="rejectWeight('${item.id}')" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Edit</button>`:''}
+            ${submitted&&!isLead?`<span style="font-size:11px;color:var(--text3)">Waiting for lead approval</span>`:''}
+            ${!submitted&&isLead?`<select onchange="updateTrimItemPriority('${item.id}',this.value)" style="font-size:11px;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
               <option value="high"${item.priority==='high'?' selected':''}>Trim first</option>
               <option value="normal"${item.priority==='normal'?' selected':''}>Normal</option>
               <option value="low"${item.priority==='low'?' selected':''}>Low priority</option>
             </select>`:''}
-            ${isLead&&!item.fromMetrc?`<button onclick="openAddTrimItem('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Edit</button>`:''}
-            ${isLead?`<button onclick="removeTrimItem('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>`:''}
+            ${!submitted&&isLead&&!item.fromMetrc?`<button onclick="openAddTrimItem('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Edit info</button>`:''}
+            ${!submitted&&isLead?`<button onclick="removeTrimItem('${item.id}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>`:''}
           </div>
         </div>
       </div>
@@ -3827,20 +3842,70 @@ function renderTrimQueue(){
   }).join('');
 
   list.innerHTML='';
-  if(activeTrimQueue.length){
-    list.innerHTML+=`<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Queue — ${activeTrimQueue.length} active</div>`;
-    list.innerHTML+=renderItems(activeTrimQueue,0);
-  }
+  list.innerHTML+=`<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Queue — ${activeTrimQueue.length} active</div>`;
+  list.innerHTML+=renderItems(activeTrimQueue,0);
   if(isLead){
     list.innerHTML+=`<div style="margin-top:10px"><button onclick="openAddTrimItem()" style="font-size:12px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--green-dim);background:var(--green-bg);color:var(--green);cursor:pointer">+ Add manually</button></div>`;
   }
-  if(doneQueue.length){
-    list.innerHTML+=`<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin:14px 0 8px">Completed</div>`;
-    list.innerHTML+=renderItems(doneQueue,activeTrimQueue.length);
+}
+
+function renderTrimHistory(){
+  trimQueue=L('wg_trim_queue',[]);
+  trimWeights=L('wg_trim_weights',{});
+  const wrap=document.getElementById('trim-history-list');
+  if(!wrap)return;
+  const archived=trimQueue.filter(i=>i.archived);
+  if(!archived.length){
+    wrap.innerHTML=`<div class="empty-state">No archived harvests yet. Approved items from the trim queue land here.</div>`;
+    return;
   }
+  // Sort by approvedAt descending (most recent first)
+  archived.sort((a,b)=>{
+    const aT=(trimWeights[a.id]&&trimWeights[a.id].approvedAt)||'';
+    const bT=(trimWeights[b.id]&&trimWeights[b.id].approvedAt)||'';
+    return bT.localeCompare(aT);
+  });
+  wrap.innerHTML=`
+    <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Approved harvests — ${archived.length}</div>
+    ${archived.map(item=>{
+      const w=trimWeights[item.id]||{};
+      const dateObj=item.harvestDate?new Date(item.harvestDate):null;
+      const harvestStr=dateObj&&!isNaN(dateObj)?dateObj.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):item.harvestDate||'';
+      const apprDate=w.approvedAt?new Date(w.approvedAt):null;
+      const apprStr=apprDate&&!isNaN(apprDate)?apprDate.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+apprDate.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
+      return `<div class="card" style="border-left:3px solid var(--green);margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div style="font-size:14px;font-weight:700;font-family:var(--mono);color:var(--text)">${item.strain}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">
+              ${item.plantCount?`${item.plantCount} plants · `:''}${harvestStr}${item.roomName?' · '+item.roomName:''}
+            </div>
+          </div>
+          <span style="font-size:10px;padding:2px 8px;border-radius:var(--r);background:var(--green-bg);color:var(--green);font-weight:600;border:1px solid var(--green-dim)">✓ Approved${apprStr?' '+apprStr:''}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${w.bigBuds?`<span style="font-size:11px;padding:2px 8px;background:var(--green-bg);color:var(--green);border-radius:var(--r);font-family:var(--mono)">Bigs ${w.bigBuds}g</span>`:''}
+          ${w.smallBuds?`<span style="font-size:11px;padding:2px 8px;background:var(--blue-bg);color:var(--blue);border-radius:var(--r);font-family:var(--mono)">Smalls ${w.smallBuds}g</span>`:''}
+          ${w.trim?`<span style="font-size:11px;padding:2px 8px;background:var(--bg3);color:var(--text2);border-radius:var(--r);font-family:var(--mono)">Trim ${w.trim}g</span>`:''}
+          ${w.purplTHC?`<span style="font-size:11px;padding:2px 8px;background:rgba(168,85,247,0.15);color:var(--purple);border-radius:var(--r);font-family:var(--mono);font-weight:600">THC ${w.purplTHC}%</span>`:''}
+          ${w.moisture?`<span style="font-size:11px;padding:2px 8px;background:var(--bg3);color:var(--text2);border-radius:var(--r);font-family:var(--mono)">H₂O ${w.moisture}%</span>`:''}
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:10px;color:var(--text3)">
+          ${w.enteredBy?`<span>Entered by ${w.enteredBy}</span>`:''}
+          ${w.purplEnteredBy&&w.purplEnteredBy!==w.enteredBy?`<span>QC by ${w.purplEnteredBy}</span>`:''}
+          ${w.approvedBy?`<span>Approved by ${w.approvedBy}</span>`:''}
+        </div>
+      </div>`;
+    }).join('')}
+  `;
 }
 
 function renderWeightCards(){
+  // Backward-compat shim — old callers funnel into the new history renderer
+  renderTrimHistory();
+}
+
+function _legacyRenderWeightCardsUnused(){
   const wrap=document.getElementById('weight-cards');
   if(!wrap)return;
   if(!trimQueue.length){wrap.innerHTML=`<div class="empty-state">No strains in trim queue yet.</div>`;return;}
@@ -3888,9 +3953,10 @@ function saveWeight(itemId,field,value){
   if(!trimWeights[itemId]) trimWeights[itemId]={};
   trimWeights[itemId][field]=value?parseFloat(value):null;
   S('wg_trim_weights',trimWeights);
-  renderTrimQueue();
+  // Don't re-render trim queue on every keystroke — would lose focus on the input.
+  // Just sync to cloud + refresh preroll (it reads the cached value).
   renderPrerollPriority();
-  pushWeightsToCloud();  // sync purplTHC to cloud immediately
+  pushWeightsToCloud();
 }
 
 function savePurplResult(itemId,field,value){
@@ -3994,17 +4060,17 @@ function showPostTab(tab,el){
   document.querySelectorAll('#page-postprod .nav-tab').forEach(b=>b.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('postsub-queue').style.display=tab==='queue'?'block':'none';
-  document.getElementById('postsub-weights').style.display=tab==='weights'?'block':'none';
+  const histPane=document.getElementById('postsub-history');
+  if(histPane) histPane.style.display=tab==='history'?'block':'none';
   document.getElementById('postsub-preroll').style.display=tab==='preroll'?'block':'none';
   if(tab==='queue'){
-    // Show add button only for leads
     const addBtn=document.getElementById('add-trim-btn');
     if(addBtn) addBtn.style.display=currentRole==='lead'?'inline-flex':'none';
     renderTrimQueue();
     const lbl=document.getElementById('queue-last-refresh');
     if(lbl) lbl.textContent='Last refreshed: '+fmtTime();
   }
-  if(tab==='weights') renderWeightCards();
+  if(tab==='history') renderTrimHistory();
   if(tab==='preroll') renderPrerollPriority();
 }
 
@@ -4239,8 +4305,9 @@ async function pullWeightsFromCloud(){
       const cloudW=json.data.trimWeights;
       Object.entries(cloudW).forEach(([id,w])=>{
         const local=trimWeights[id]||{};
-        // Use cloud version if it has a more advanced status
-        const statusOrder={entry:0,pending:1,approved:2};
+        // Use cloud version if it has a more advanced status.
+        // 'pending' kept for backward-compat with old data; same level as 'submitted'.
+        const statusOrder={entry:0,pending:1,submitted:1,approved:2};
         const cloudStatus=statusOrder[w.status||'entry']||0;
         const localStatus=statusOrder[local.status||'entry']||0;
         if(cloudStatus>=localStatus) trimWeights[id]=w;
@@ -4389,50 +4456,64 @@ async function pullRoomChecksFromCloud(silent=false){
 
 function submitWeightForVerification(itemId){
   if(!loggedInMember){alert('Sign in first to submit weights.');return;}
-  if(!trimWeights[itemId]){alert('Enter weights before submitting.');return;}
+  if(!trimWeights[itemId]){alert('Enter at least one weight before submitting.');return;}
   const w=trimWeights[itemId];
-  if(!w.bigBuds&&!w.smallsAndTrim){alert('Enter at least bigs and smalls+trim before submitting.');return;}
-  trimWeights[itemId].status='pending';
+  if(!w.bigBuds&&!w.smallBuds&&!w.trim){alert('Enter at least one weight (bigs, smalls, or trim) before submitting.');return;}
+  trimWeights[itemId].status='submitted';
   trimWeights[itemId].enteredBy=loggedInMember.name;
+  trimWeights[itemId].submittedAt=new Date().toISOString();
   trimWeights[itemId].approvedBy='';
+  trimWeights[itemId].approvedAt='';
   S('wg_trim_weights',trimWeights);
   pushWeightsToCloud();
-  renderWeightCards();
-  // Notify #postprod Slack
+  pushConfigDebounced();
+  renderTrimQueue();
+  // Notify #postprod Slack — lead is the approver now
   const wh=webhooks['postprod'];
   const item=trimQueue.find(i=>i.id===itemId);
   if(wh&&wh.startsWith('https://hooks.slack.com/')&&item){
-    const msg=`*Weight submission pending verification* — ${item.strain}\nEntered by: ${loggedInMember.name}\nBigs: ${w.bigBuds||'—'}g · Smalls+trim: ${w.smallsAndTrim||'—'}g\n_Open Post Production → Log Weights to approve_`;
+    const msg=`*Weight submission pending lead approval* — ${item.strain}\nEntered by: ${loggedInMember.name}\nBigs: ${w.bigBuds||'—'}g · Smalls: ${w.smallBuds||'—'}g · Trim: ${w.trim||'—'}g${w.purplTHC?` · THC: ${w.purplTHC}%`:''}\n_Open Post Production → Trim Queue to approve_`;
     fetch(wh,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:msg})}).catch(()=>{});
   }
 }
 function approveWeight(itemId){
   if(!loggedInMember){alert('Sign in first to approve.');return;}
+  if(currentRole!=='lead'){alert('Only leads can approve.');return;}
   const w=trimWeights[itemId]||{};
-  if(loggedInMember.name===w.enteredBy){alert('A different employee must approve these weights.');return;}
   trimWeights[itemId].status='approved';
   trimWeights[itemId].approvedBy=loggedInMember.name;
+  trimWeights[itemId].approvedAt=new Date().toISOString();
   S('wg_trim_weights',trimWeights);
-  pushWeightsToCloud();
+  // Archive the trim queue item (removes from active queue, appears in history)
+  trimQueue=L('wg_trim_queue',[]);
   const item=trimQueue.find(i=>i.id===itemId);
   if(item){
-    postToSheet('Weight_Log',[item.strain,item.harvestDate||'',w.bigBuds||'',w.smallsAndTrim||'',
-      w.smallBuds||'',w.moisture||'',w.purplTHC||'',w.enteredBy,loggedInMember.name,new Date().toISOString()]);
+    item.archived=true;
+    item.archivedAt=new Date().toISOString();
+    S('wg_trim_queue',trimQueue);
+  }
+  pushWeightsToCloud();
+  pushConfigDebounced();
+  // Append to Weight_Log sheet (single-line ledger, METRC-ready format)
+  if(item){
+    postToSheet('Weight_Log',[item.strain,item.harvestDate||'',w.bigBuds||'',w.smallBuds||'',
+      w.trim||'',w.moisture||'',w.purplTHC||'',w.enteredBy||'',loggedInMember.name,new Date().toISOString()]);
   }
   const wh=webhooks['postprod'];
   if(wh&&wh.startsWith('https://hooks.slack.com/')){
-    const msg=`*Weight log approved ✓* — ${item?.strain||itemId}\nEntered by: ${w.enteredBy} · Approved by: ${loggedInMember.name}\nBigs: ${w.bigBuds||'—'}g · Smalls+trim: ${w.smallsAndTrim||'—'}g · THC: ${w.purplTHC||'—'}%`;
+    const msg=`*Weight log approved ✓* — ${item?.strain||itemId}\nEntered by: ${w.enteredBy||'?'} · Approved by: ${loggedInMember.name}\nBigs: ${w.bigBuds||'—'}g · Smalls: ${w.smallBuds||'—'}g · Trim: ${w.trim||'—'}g${w.purplTHC?` · THC: ${w.purplTHC}%`:''}\n_Now in Trim history — enter into METRC._`;
     fetch(wh,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:msg})}).catch(()=>{});
   }
-  renderWeightCards();
+  renderTrimQueue();
 }
 function rejectWeight(itemId){
+  if(!trimWeights[itemId]) return;
   trimWeights[itemId].status='entry';
-  trimWeights[itemId].enteredBy='';
-  trimWeights[itemId].approvedBy='';
+  trimWeights[itemId].submittedAt='';
   S('wg_trim_weights',trimWeights);
   pushWeightsToCloud();
-  renderWeightCards();
+  pushConfigDebounced();
+  renderTrimQueue();
 }
 
 // ══════════════════════════════════════════════
