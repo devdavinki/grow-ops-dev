@@ -841,6 +841,25 @@ button { cursor: pointer; }
       <div class="metrc-upload-cell" id="mup-harvests"><div class="metrc-upload-label">Harvests</div><div class="metrc-upload-status" id="mup-harvests-status">Not loaded</div></div>
     </div>
 
+    <!-- GROWLINK CSV BACKFILL -->
+    <div class="section-title" style="margin-top:20px;margin-bottom:10px">Growlink CSV backfill</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">
+      Use this when a room's substrate history has gaps in GL_History but Growlink's CSV export still has data.
+      Export the room from Growlink (Analytics → Export CSV), pick the room, then upload here.
+      Rows merge into GL_History and V2 picks them up on the next probe metrics recalculation.
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:20px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <label style="font-size:12px;color:var(--text2);font-weight:600;min-width:60px">Room:</label>
+        <select id="csv-room-select" style="padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--text);min-width:140px">
+          <option value="">— pick a room —</option>
+        </select>
+        <input type="file" id="csv-file-input" accept=".csv" style="font-size:12px;color:var(--text3);flex:1;min-width:180px"/>
+        <button onclick="importGrowlinkCsv()" class="send-btn green" style="font-size:12px;padding:6px 14px;font-weight:600">Import</button>
+      </div>
+      <div id="csv-import-status" style="font-size:11px;font-family:var(--mono);color:var(--text3);min-height:16px"></div>
+    </div>
+
     <!-- GOOGLE SHEET URL -->
     <div class="section-title" style="margin-top:20px;margin-bottom:10px">Google Sheet integration</div>
     <div style="font-size:13px;color:var(--text2);margin-bottom:10px;line-height:1.6">Apps Script Web App URL for all sheet writes.</div>
