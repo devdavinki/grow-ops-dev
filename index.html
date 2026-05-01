@@ -3975,54 +3975,59 @@ function renderPrerollPriority(){
   trimWeights=L('wg_trim_weights',{});
   const isLead=currentRole==='lead';
 
-  // Deduplicate by strain name — merge weights, weighted avg THC
-  const byStrain={};
-  trimQueue
+  // One row per harvest — multiple lots of the same strain are NOT merged so the
+  // team can see if one batch tested higher than another and prioritize accordingly.
+  const strains=trimQueue
     .map(item=>({...item,w:trimWeights[item.id]||{}}))
-    .filter(item=>item.w.purplTHC)
-    .forEach(item=>{
-      const key=(item.strain||'').toLowerCase().trim();
-      if(!byStrain[key]){
-        byStrain[key]={strain:item.strain,thc:parseFloat(item.w.purplTHC)||0,
-          total:item.w.purplTotal?parseFloat(item.w.purplTotal):null,
-          smalls:item.w.smallBuds?parseFloat(item.w.smallBuds):0,
-          roomName:rooms.find(r=>r.id===item.roomId)?.name||'',ids:[item.id]};
-      } else {
-        const ex=byStrain[key];
-        const w1=ex.smalls||1, w2=item.w.smallBuds?parseFloat(item.w.smallBuds):1;
-        ex.thc=((ex.thc*w1)+(parseFloat(item.w.purplTHC)*w2))/(w1+w2);
-        ex.smalls+=(item.w.smallBuds?parseFloat(item.w.smallBuds):0);
-        ex.ids.push(item.id);
-        ex.roomName='Multiple rooms';
-      }
+    .filter(item=>{
+      const sm=parseFloat(item.w.smallBuds)||0;
+      const thc=parseFloat(item.w.purplTHC)||0;
+      return sm>0 || thc>0;
+    })
+    .map(item=>({
+      strain:item.strain,
+      thc:parseFloat(item.w.purplTHC)||0,
+      smalls:parseFloat(item.w.smallBuds)||0,
+      roomName:rooms.find(r=>r.id===item.roomId)?.name||item.roomName||'',
+      harvestDate:item.harvestDate||'',
+      archived:!!item.archived,
+      ids:[item.id]
+    }))
+    // Sort: strains with THC first (descending), strains without THC at the bottom
+    .sort((a,b)=>{
+      if(a.thc>0 && b.thc===0) return -1;
+      if(a.thc===0 && b.thc>0) return 1;
+      return b.thc - a.thc;
     });
-
-  const strains=Object.values(byStrain).sort((a,b)=>b.thc-a.thc);
   if(!strains.length){
-    list.innerHTML=`<div class="empty-state">No Purpl Pro results entered yet. Add test results in the Log Weights tab.</div>`;
+    list.innerHTML=`<div class="empty-state">No harvests with smalls or THC entered yet. Add weights in the Trim queue.</div>`;
     return;
   }
 
+  // Strains with no THC drop the rank medal (no meaningful ranking yet)
+  const rankedStrains=strains.filter(s=>s.thc>0);
   list.innerHTML=strains.map((item,i)=>{
-    const rank=i+1;
+    const ranked=item.thc>0;
+    const rank=ranked?(rankedStrains.indexOf(item)+1):null;
     const rankColor=rank===1?'var(--amber)':rank===2?'var(--text3)':rank===3?'#cd7f32':'var(--text3)';
-    const rankLabel=rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':`#${rank}`;
-    return`<div class="card" style="border-left:3px solid ${rankColor}">
+    const rankLabel=rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':(rank?`#${rank}`:'');
+    const borderColor=ranked?rankColor:'var(--border2)';
+    const idsJson=JSON.stringify(item.ids);
+    return`<div class="card" style="border-left:3px solid ${borderColor};${ranked?'':'opacity:0.85'}">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="font-size:22px;min-width:32px;text-align:center">${rankLabel}</div>
+        <div style="font-size:22px;min-width:32px;text-align:center;color:${ranked?'var(--text)':'var(--text3)'}">${rankLabel||'·'}</div>
         <div style="flex:1;min-width:120px">
           <div style="font-size:14px;font-weight:700;color:var(--text)">${item.strain}</div>
-          <div style="font-size:11px;color:var(--text3)">${item.roomName}${item.ids.length>1?` · ${item.ids.length} lots`:''}</div>
+          <div style="font-size:11px;color:var(--text3)">${item.roomName}${item.harvestDate?' · '+(new Date(item.harvestDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||item.harvestDate):''}${item.archived?' · <span style="color:var(--green)">archived</span>':''}${!ranked?' · No THC reading yet':''}</div>
         </div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-          <div style="text-align:center">
-            <div style="font-size:22px;font-weight:700;color:var(--purple);font-family:var(--mono)">${item.thc.toFixed(1)}%</div>
-            <div style="font-size:10px;color:var(--text3)">THC</div>
+          <div style="text-align:center;min-width:80px">
+            ${ranked?`<div style="font-size:22px;font-weight:700;color:var(--purple);font-family:var(--mono)">${item.thc.toFixed(1)}%</div>`:`<input type="number" min="0" max="40" step="0.1" placeholder="—" value="" data-strain="${item.strain.replace(/"/g,'&quot;')}" data-ids='${idsJson.replace(/\'/g,"&#39;")}'
+              style="width:70px;font-size:14px;font-weight:700;color:var(--purple);font-family:var(--mono);text-align:center;padding:4px 6px;border-radius:var(--r);border:1px solid var(--purple-dim,rgba(168,85,247,0.4));background:var(--bg2)"
+              onblur="savePrerollTHC(this)"
+              onkeydown="if(event.key==='Enter')this.blur();"/>`}
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">THC${ranked?'':' (tap to enter)'}</div>
           </div>
-          ${item.total!==null?`<div style="text-align:center">
-            <div style="font-size:18px;font-weight:600;color:var(--text2);font-family:var(--mono)">${item.total.toFixed(1)}%</div>
-            <div style="font-size:10px;color:var(--text3)">Total</div>
-          </div>`:''}
           <div style="text-align:center">
             <div style="font-size:18px;font-weight:600;color:var(--blue);font-family:var(--mono)">${item.smalls>0?item.smalls.toFixed(1)+'g':'—'}</div>
             <div style="font-size:10px;color:var(--text3)">Smalls</div>
@@ -4030,20 +4035,64 @@ function renderPrerollPriority(){
         </div>
         ${isLead?`<div style="display:flex;gap:6px;margin-left:auto;flex-shrink:0">
           <button onclick="editPrerollEntry('${item.ids[0]}')" style="font-size:11px;padding:4px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">Edit</button>
-          <button onclick="removePrerollEntry(${JSON.stringify(item.ids)})" style="font-size:11px;padding:4px 9px;border-radius:var(--r);border:1px solid var(--red-bg);background:none;color:var(--red);cursor:pointer">Remove</button>
+          <button onclick="removePrerollEntry(${idsJson})" style="font-size:11px;padding:4px 9px;border-radius:var(--r);border:1px solid var(--red-bg);background:none;color:var(--red);cursor:pointer">Remove</button>
         </div>`:''}
       </div>
     </div>`;
   }).join('');
 }
 
+// ── Save THC entered inline on a preroll card. Applies to all matching lot ids
+// (since preroll dedupes by strain, multiple harvests of the same strain may share a card).
+function savePrerollTHC(inputEl){
+  const v=parseFloat(inputEl.value);
+  if(isNaN(v)||v<=0||v>40){inputEl.value='';return;}
+  let ids=[];
+  try{ ids=JSON.parse(inputEl.getAttribute('data-ids').replace(/&#39;/g,"'")); }catch(e){ ids=[]; }
+  if(!ids.length) return;
+  trimWeights=L('wg_trim_weights',{});
+  ids.forEach(id=>{
+    if(!trimWeights[id]) trimWeights[id]={};
+    trimWeights[id].purplTHC=v;
+    if(loggedInMember) trimWeights[id].purplEnteredBy=loggedInMember.name;
+  });
+  S('wg_trim_weights',trimWeights);
+  pushWeightsToCloud();
+  renderPrerollPriority();
+}
+
 function editPrerollEntry(id){
-  showPostTab('weights',document.querySelectorAll('#page-postprod .nav-tab')[1]);
+  if(currentRole!=='lead'){alert('Only leads can edit preroll entries.');return;}
+  // Find the trim queue item — could be active OR archived.
+  const item=trimQueue.find(i=>i.id===id);
+  if(!item){alert('Item not found in trim queue.');return;}
+  if(item.archived){
+    // Un-archive it back to the active trim queue so the user can edit weights inline.
+    if(!confirm('This item is in Trim history. Move it back to the active trim queue to edit?')) return;
+    item.archived=false;
+    item.archivedAt='';
+    if(trimWeights[id]){
+      trimWeights[id].status='entry';
+      trimWeights[id].approvedBy='';
+      trimWeights[id].approvedAt='';
+      S('wg_trim_weights',trimWeights);
+      pushWeightsToCloud();
+    }
+    S('wg_trim_queue',trimQueue);
+    pushConfigDebounced();
+  }
+  // Switch to the trim queue tab and scroll to the strain card.
+  showPostTab('queue',document.querySelectorAll('#page-postprod .nav-tab')[0]);
   setTimeout(()=>{
-    const el=document.getElementById('weight-card-'+id);
-    if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='2px solid var(--green)';setTimeout(()=>el.style.outline='',2000);}
-    else{ const cards=document.querySelectorAll('#weight-cards .card');cards.forEach(c=>{if(c.textContent.includes(id)){c.scrollIntoView({behavior:'smooth',block:'center'});c.style.outline='2px solid var(--green)';setTimeout(()=>c.style.outline='',2000);}});}
-  },200);
+    const cards=document.querySelectorAll('#trim-queue-list .card');
+    cards.forEach(c=>{
+      if(c.textContent.includes(item.strain)){
+        c.scrollIntoView({behavior:'smooth',block:'center'});
+        c.style.outline='2px solid var(--green)';
+        setTimeout(()=>c.style.outline='',2000);
+      }
+    });
+  },250);
 }
 
 function removePrerollEntry(ids){
