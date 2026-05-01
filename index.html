@@ -3968,6 +3968,7 @@ function showPage(page){
   if(page==='daily-review'){renderDailyReview();}
   if(page==='blueprint'){renderBlueprint();}
   if(page==='supplies'){renderSupplies();}
+  if(page==='settings'){ try{ populateCsvRoomSelect(); }catch(e){} }
   if(page==='clonetracker'){
     renderCloneTracker();
     pullMetrcFromCloud(true);
@@ -3987,6 +3988,52 @@ function showPage(page){
 // ══════════════════════════════════════════════
 // GOOGLE SHEET HELPERS
 // ══════════════════════════════════════════════
+// Populate the CSV importer's room selector when Settings tab opens
+function populateCsvRoomSelect(){
+  const sel = document.getElementById('csv-room-select');
+  if(!sel) return;
+  // Only repopulate if it's empty (other than placeholder)
+  if(sel.options.length > 1) return;
+  rooms.filter(r => r.id && /^r\d+$/.test(r.id)).forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.id;
+    opt.textContent = r.name + ' (' + r.id + ')';
+    sel.appendChild(opt);
+  });
+}
+
+async function importGrowlinkCsv(){
+  const roomId = document.getElementById('csv-room-select').value;
+  const fileInp = document.getElementById('csv-file-input');
+  const status = document.getElementById('csv-import-status');
+  if(!roomId){ status.textContent = '⚠ pick a room first'; status.style.color = 'var(--amber)'; return; }
+  if(!fileInp.files || !fileInp.files[0]){ status.textContent = '⚠ pick a CSV file first'; status.style.color = 'var(--amber)'; return; }
+  const file = fileInp.files[0];
+  status.textContent = 'Reading ' + file.name + '…';
+  status.style.color = 'var(--text3)';
+  try {
+    const csvText = await file.text();
+    status.textContent = 'Uploading ' + Math.round(csvText.length/1024) + 'KB to backend…';
+    const resp = await fetch(gsUrl, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'importCsv', roomId: roomId, csvText: csvText }),
+    });
+    const result = await resp.json();
+    if(result.ok){
+      status.textContent = '✓ ' + roomId + ': wrote ' + result.written + ' rows, ' + (result.dupes||0) + ' dupes skipped, ' + (result.skipped||0) + ' invalid skipped';
+      status.style.color = 'var(--green)';
+      fileInp.value = '';
+    } else {
+      status.textContent = '✗ Error: ' + (result.error || 'unknown');
+      status.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    console.error('[CSV import] error', e);
+    status.textContent = '✗ ' + e;
+    status.style.color = 'var(--red)';
+  }
+}
+
 function saveGsUrl(val){
   gsUrl=val.trim(); S('wg_gs_url',gsUrl);
   const st=document.getElementById('gs-url-status');
