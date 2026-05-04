@@ -1026,7 +1026,7 @@ button { cursor: pointer; }
     </div>
     <div id="metrc-sub-strains" style="display:none">
       <div style="margin-bottom:12px">
-        <input id="metrc-strain-search" type="text" placeholder="Search strains..." 
+        <input id="metrc-strain-search" type="text" placeholder="Search by strain or code..." 
           style="width:100%;max-width:320px;font-size:13px" oninput="renderMetrcStrains()"/>
       </div>
       <div id="metrc-strains-grid" class="grid-3"></div>
@@ -1383,6 +1383,459 @@ function getAdditiveForRoom(room){
 // ROLE
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
+// STRAIN CODES — house abbreviations for every strain. Use strainWithCode(name)
+// for display labels so the team agrees on which code = which strain.
+// ══════════════════════════════════════════════
+// Strain → code mapping. Keys are lowercase, whitespace-collapsed for fuzzy match.
+const STRAIN_CODES = {
+  "a.s.s. #1 (american skunk selection)": {
+    "code": "ASS",
+    "name": "A.S.S. #1 (American Skunk Selection)"
+  },
+  "air force one": {
+    "code": "AF1",
+    "name": "Air Force One"
+  },
+  "alaskan thunderfuck": {
+    "code": "ATF",
+    "name": "Alaskan Thunderfuck"
+  },
+  "angel's rest": {
+    "code": "AR",
+    "name": "Angel's Rest"
+  },
+  "animal mint cake": {
+    "code": "AMC",
+    "name": "Animal Mint Cake"
+  },
+  "animal tsunami": {
+    "code": "ATS",
+    "name": "Animal Tsunami"
+  },
+  "apple butter": {
+    "code": "ABUT",
+    "name": "Apple Butter"
+  },
+  "apple fritter": {
+    "code": "AF",
+    "name": "Apple Fritter"
+  },
+  "astronaut status": {
+    "code": "ASTR",
+    "name": "Astronaut Status"
+  },
+  "baby yoda": {
+    "code": "BY",
+    "name": "Baby Yoda"
+  },
+  "bacio #41": {
+    "code": "B41",
+    "name": "Bacio #41"
+  },
+  "banana runtz": {
+    "code": "BNRZ",
+    "name": "Banana Runtz"
+  },
+  "biggie runtz": {
+    "code": "BIGR",
+    "name": "Biggie Runtz"
+  },
+  "biscotti og": {
+    "code": "BSOG",
+    "name": "Biscotti OG"
+  },
+  "black ice": {
+    "code": "BLK",
+    "name": "Black Ice"
+  },
+  "black panther": {
+    "code": "BP",
+    "name": "Black Panther"
+  },
+  "blockberry": {
+    "code": "BLOK",
+    "name": "Blockberry"
+  },
+  "blue dream": {
+    "code": "BD",
+    "name": "Blue Dream"
+  },
+  "blue lobster": {
+    "code": "BLOB",
+    "name": "Blue Lobster"
+  },
+  "blue nana punch": {
+    "code": "BNP",
+    "name": "Blue Nana Punch"
+  },
+  "blue nerdz": {
+    "code": "NERD",
+    "name": "Blue Nerdz"
+  },
+  "blue zushi": {
+    "code": "BZ",
+    "name": "Blue Zushi"
+  },
+  "blueberry bolo #8": {
+    "code": "BOLO",
+    "name": "Blueberry Bolo #8"
+  },
+  "blueberry kush mints": {
+    "code": "BBKM",
+    "name": "Blueberry Kush Mints"
+  },
+  "caddy runtz": {
+    "code": "CAD",
+    "name": "Caddy Runtz"
+  },
+  "cannoli": {
+    "code": "CAN",
+    "name": "Cannoli"
+  },
+  "cap junky": {
+    "code": "CJ",
+    "name": "Cap Junky"
+  },
+  "champagne patties": {
+    "code": "CP",
+    "name": "Champagne Patties"
+  },
+  "cherry pop tart": {
+    "code": "CPT",
+    "name": "Cherry Pop Tart"
+  },
+  "clusterfuck": {
+    "code": "CFCK",
+    "name": "Clusterfuck"
+  },
+  "curb stomper": {
+    "code": "CURB",
+    "name": "Curb Stomper"
+  },
+  "dante's inferno": {
+    "code": "DNTE",
+    "name": "Dante's Inferno"
+  },
+  "deadhead og": {
+    "code": "DHOG",
+    "name": "Deadhead OG"
+  },
+  "demon king": {
+    "code": "DEMN",
+    "name": "Demon King"
+  },
+  "double up": {
+    "code": "DUP",
+    "name": "Double Up"
+  },
+  "e-85": {
+    "code": "E85",
+    "name": "E-85"
+  },
+  "eastside og": {
+    "code": "EAST",
+    "name": "Eastside OG"
+  },
+  "el chivo #15": {
+    "code": "ELC",
+    "name": "El Chivo #15"
+  },
+  "flava flav": {
+    "code": "FLAV",
+    "name": "Flava Flav"
+  },
+  "french maid": {
+    "code": "MAID",
+    "name": "French Maid"
+  },
+  "gelato 41": {
+    "code": "G41",
+    "name": "Gelato 41"
+  },
+  "georgia pie": {
+    "code": "GP",
+    "name": "Georgia Pie"
+  },
+  "gluttony #8": {
+    "code": "GLUT",
+    "name": "Gluttony #8"
+  },
+  "grand daddy gelato": {
+    "code": "GDG",
+    "name": "Grand Daddy Gelato"
+  },
+  "grape colada": {
+    "code": "GCO",
+    "name": "Grape Colada"
+  },
+  "grape gas": {
+    "code": "GG",
+    "name": "Grape Gas"
+  },
+  "grape gotti": {
+    "code": "GOTI",
+    "name": "Grape Gotti"
+  },
+  "gumbo": {
+    "code": "GMBO",
+    "name": "Gumbo"
+  },
+  "gypsy road": {
+    "code": "GYP",
+    "name": "Gypsy Road"
+  },
+  "hash burger": {
+    "code": "HB",
+    "name": "Hash Burger"
+  },
+  "hippy crasher": {
+    "code": "HC",
+    "name": "Hippy Crasher"
+  },
+  "ice 101 #3": {
+    "code": "I101",
+    "name": "Ice 101 #3"
+  },
+  "icee pie #36": {
+    "code": "ICP",
+    "name": "ICEE PIE #36"
+  },
+  "icee runtz #6": {
+    "code": "ICER",
+    "name": "Icee Runtz #6"
+  },
+  "j1 wuntz": {
+    "code": "WUNT",
+    "name": "J1 Wuntz"
+  },
+  "jurassic wonton": {
+    "code": "JW",
+    "name": "Jurassic Wonton"
+  },
+  "kenny powers": {
+    "code": "KP",
+    "name": "Kenny Powers"
+  },
+  "key lime pie": {
+    "code": "KLP",
+    "name": "Key Lime Pie"
+  },
+  "key lime sherbert": {
+    "code": "KLS",
+    "name": "Key Lime Sherbert"
+  },
+  "kushmints": {
+    "code": "KM3",
+    "name": "Kushmints"
+  },
+  "kush mintz 3": {
+    "code": "KM3",
+    "name": "Kush Mintz 3"
+  },
+  "kush mintz #3": {
+    "code": "KM3",
+    "name": "Kush Mintz 3"
+  },
+  "kushmintz 3": {
+    "code": "KM3",
+    "name": "Kush Mintz 3"
+  },
+  "lemon cherry bubblegum": {
+    "code": "LCB",
+    "name": "Lemon Cherry Bubblegum"
+  },
+  "lemon cherry pie": {
+    "code": "LCP",
+    "name": "Lemon Cherry Pie"
+  },
+  "lemon g": {
+    "code": "LG",
+    "name": "Lemon G"
+  },
+  "lemon party x chemdog #1": {
+    "code": "LPCH",
+    "name": "Lemon Party x Chemdog #1"
+  },
+  "lemon ztrawz": {
+    "code": "LZZ",
+    "name": "Lemon Ztrawz"
+  },
+  "lime foot": {
+    "code": "FOOT",
+    "name": "Lime Foot"
+  },
+  "malibu oranges": {
+    "code": "MO",
+    "name": "Malibu Oranges"
+  },
+  "mexican flan x adios motherfucker": {
+    "code": "MFAM",
+    "name": "Mexican Flan x Adios Motherfucker"
+  },
+  "mike's strawberry lemonade": {
+    "code": "MSL",
+    "name": "Mike's Strawberry Lemonade"
+  },
+  "mob (mother of berries)": {
+    "code": "MOB",
+    "name": "MOB (Mother of Berries)"
+  },
+  "northern lights #5 x starfighter": {
+    "code": "NLSF",
+    "name": "Northern Lights #5 x Starfighter"
+  },
+  "now & laterz": {
+    "code": "NLTR",
+    "name": "Now & Laterz"
+  },
+  "papayamosa": {
+    "code": "PAPA",
+    "name": "Papayamosa"
+  },
+  "permanent chimera": {
+    "code": "PC",
+    "name": "Permanent Chimera"
+  },
+  "pie crusher #57": {
+    "code": "PIEC",
+    "name": "Pie Crusher #57"
+  },
+  "pineapple burst": {
+    "code": "PAB",
+    "name": "Pineapple Burst"
+  },
+  "pink panties": {
+    "code": "PP",
+    "name": "Pink Panties"
+  },
+  "platinum lemon cherry gelato": {
+    "code": "PLCG",
+    "name": "Platinum Lemon Cherry Gelato"
+  },
+  "pure kush": {
+    "code": "PK",
+    "name": "Pure Kush"
+  },
+  "queen of tartz": {
+    "code": "QT",
+    "name": "Queen of Tartz"
+  },
+  "red velvet": {
+    "code": "RV",
+    "name": "Red Velvet"
+  },
+  "runtz mints": {
+    "code": "RM",
+    "name": "Runtz Mints"
+  },
+  "sherb cream pie": {
+    "code": "SCP",
+    "name": "Sherb Cream Pie"
+  },
+  "sherbanger": {
+    "code": "BANG",
+    "name": "Sherbanger"
+  },
+  "singapore sling": {
+    "code": "SING",
+    "name": "Singapore Sling"
+  },
+  "slapz": {
+    "code": "SLAP",
+    "name": "Slapz"
+  },
+  "sour strawberry kush x onycd": {
+    "code": "SSO",
+    "name": "Sour Strawberry Kush x ONYCD"
+  },
+  "space runtz": {
+    "code": "SPAC",
+    "name": "Space Runtz"
+  },
+  "strawberry meringue": {
+    "code": "SBM",
+    "name": "Strawberry Meringue"
+  },
+  "sugar zonuts": {
+    "code": "ZNUT",
+    "name": "Sugar Zonuts"
+  },
+  "sunset runtz": {
+    "code": "SUNR",
+    "name": "Sunset Runtz"
+  },
+  "super boof": {
+    "code": "BOOF",
+    "name": "Super Boof"
+  },
+  "super stomper": {
+    "code": "SSTM",
+    "name": "Super Stomper"
+  },
+  "t1000": {
+    "code": "T1K",
+    "name": "T1000"
+  },
+  "teal baboon": {
+    "code": "BOON",
+    "name": "Teal Baboon"
+  },
+  "this shit is bananas": {
+    "code": "TSB",
+    "name": "This Shit is Bananas"
+  },
+  "tokyo sunset": {
+    "code": "TKYO",
+    "name": "Tokyo Sunset"
+  },
+  "uptown og": {
+    "code": "UTOG",
+    "name": "Uptown OG"
+  },
+  "watermelon gelato": {
+    "code": "WG",
+    "name": "Watermelon Gelato"
+  },
+  "wilson's wonder": {
+    "code": "WW",
+    "name": "Wilson's Wonder"
+  },
+  "winter sunset": {
+    "code": "WINS",
+    "name": "Winter Sunset"
+  },
+  "ya smell me": {
+    "code": "YSM",
+    "name": "Ya Smell Me"
+  },
+  "zeclair": {
+    "code": "ZEC",
+    "name": "Zeclair"
+  },
+  "zerealz": {
+    "code": "ZRLZ",
+    "name": "Zerealz"
+  }
+};
+
+// Returns "Strain Name (CODE)" if we have a code, else just the original name.
+// Tolerates whitespace and case variations. Returns the user's exact input casing.
+function strainWithCode(name){
+  if(!name) return name;
+  const key=String(name).toLowerCase().trim().replace(/\s+/g,' ');
+  const hit=STRAIN_CODES[key];
+  if(hit && hit.code) return name + ' (' + hit.code + ')';
+  return name;
+}
+
+function strainCodeOnly(name){
+  if(!name) return '';
+  const key=String(name).toLowerCase().trim().replace(/\s+/g,' ');
+  const hit=STRAIN_CODES[key];
+  return (hit && hit.code) || '';
+}
+
+// ══════════════════════════════════════════════
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
@@ -1627,7 +2080,7 @@ function renderRooms(){
       <div class="card-head">
         <div>
           <div class="room-name">${room.name}${(_manualByRoom[room.id]&&_manualByRoom[room.id].length)?` <span title="Manual irrigation in last 30 min" style="display:inline-block;margin-left:6px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.04em;border-radius:3px;background:rgba(245,158,11,0.18);color:var(--amber);vertical-align:middle">✋ MANUAL · table ${_manualByRoom[room.id].join(', ')}</span>`:''}</div>
-          <div class="room-meta">${room.tier} · ${room.sqft} sq ft${room.strain?' · '+room.strain:''}</div>
+          <div class="room-meta">${room.tier} · ${room.sqft} sq ft${room.strain?' · '+strainWithCode(room.strain):''}</div>
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${badges.join('')}</div>
       </div>
@@ -2453,7 +2906,7 @@ function renderCloneTracker(){
       const div=document.createElement('div');
       div.className='card';
       div.innerHTML=`
-        <div style="font-weight:700;font-size:13px;margin-bottom:4px">${se.strain}</div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px">${strainWithCode(se.strain)}</div>
         <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${pctS>=100?'var(--green)':pctS>=60?'var(--amber)':'var(--text)'}">${se.count}</div>
         <div style="font-size:11px;color:var(--text3);margin-bottom:8px">${needed===0?'Target met ✓':'Need '+needed+' more'} · target 150</div>
         <div class="prog-track"><div class="prog-fill" style="width:${pctS}%;background:${pctS>=100?'var(--green)':pctS>=60?'var(--amber)':'var(--blue)'}"></div></div>
@@ -2472,7 +2925,7 @@ function renderCloneTracker(){
       <div class="log-entry" style="align-items:flex-start">
         <div class="log-status" style="background:var(--green);margin-top:4px"></div>
         <div class="log-info" style="flex:1">
-          <div class="log-title">${s.count} clones — ${s.strain}${s.motherTag?` <span style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:6px">mother …${s.motherTag}</span>`:''}</div>
+          <div class="log-title">${s.count} clones — ${strainWithCode(s.strain)}${s.motherTag?` <span style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:6px">mother …${s.motherTag}</span>`:''}</div>
           <div class="log-meta">${s.who} · ${s.date} · ${s.time}</div>
         </div>
         ${(loggedInMember?.role==='lead'||loggedInMember?.name===s.who)?`<button onclick="editCloneSession(${i})" style="font-size:10px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer;flex-shrink:0;margin-top:2px">Edit</button>`:''}
@@ -2690,7 +3143,7 @@ function renderMotherRotation(){
       card.innerHTML=`
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div>
-            <div style="font-size:14px;font-weight:700;color:var(--text)">${gen.strain}</div>
+            <div style="font-size:14px;font-weight:700;color:var(--text)">${strainWithCode(gen.strain)}</div>
             <div style="font-size:11px;color:var(--text3);margin-top:2px">${gen.count} mothers · cut ${fmtShort(isoToDate(gen.cutDate))}</div>
           </div>
           <span style="font-size:11px;font-weight:600;color:${statusColor};font-family:var(--mono);white-space:nowrap">${statusText}</span>
@@ -2721,7 +3174,7 @@ function renderMotherRotation(){
   retiredSection.style.display=retired.length?'block':'none';
   retiredGrid.innerHTML=retired.map(gen=>`
     <div class="card" style="opacity:0.5;border-left:3px solid var(--border)">
-      <div style="font-size:13px;font-weight:700;color:var(--text3)">${gen.strain}</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text3)">${strainWithCode(gen.strain)}</div>
       <div style="font-size:11px;color:var(--text3)">${gen.count} mothers · cut ${fmtShort(isoToDate(gen.cutDate))} · ${gen.runsSupplied||0} runs</div>
       <button onclick="deleteMotherGen('${gen.id}')" style="font-size:11px;margin-top:8px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Remove</button>
     </div>`).join('');
@@ -4223,7 +4676,7 @@ function renderTrimQueue(){
         </div>`:''}
         <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text3);min-width:28px;flex-shrink:0;padding-top:2px">${offset+idx+1}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:14px;font-weight:700;color:var(--text);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.strain}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${strainWithCode(item.strain)}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;align-items:center">
             ${item.plantCount?`<span style="font-size:11px;padding:1px 7px;background:var(--green-bg);border:1px solid var(--green-dim);border-radius:var(--r);color:var(--green);font-family:var(--mono)">${item.plantCount} plants</span>`:''}
             ${dateStr?`<span style="font-size:11px;color:var(--text3)">${dateStr}</span>`:''}
@@ -4327,7 +4780,7 @@ function renderTrimHistory(){
       return `<div class="card" style="border-left:3px solid var(--green);margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
           <div style="flex:1;min-width:200px">
-            <div style="font-size:14px;font-weight:700;font-family:var(--mono);color:var(--text)">${item.strain}</div>
+            <div style="font-size:14px;font-weight:700;font-family:var(--mono);color:var(--text)">${strainWithCode(item.strain)}</div>
             <div style="font-size:11px;color:var(--text3);margin-top:2px">
               ${item.plantCount?`${item.plantCount} plants · `:''}${harvestStr}${item.roomName?' · '+item.roomName:''}
             </div>
@@ -4375,7 +4828,7 @@ function _legacyRenderWeightCardsUnused(){
     card.innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
-          <div style="font-size:14px;font-weight:700;color:var(--text)">${item.strain}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text)">${strainWithCode(item.strain)}</div>
           <div style="font-size:11px;color:var(--text3)">${item.harvestBatch||item.strain} · ${item.harvestDate||''}</div>
         </div>${statusBadge}
       </div>
@@ -4468,7 +4921,7 @@ function renderPrerollPriority(){
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <div style="font-size:22px;min-width:32px;text-align:center;color:${ranked?'var(--text)':'var(--text3)'}">${rankLabel||'·'}</div>
         <div style="flex:1;min-width:120px">
-          <div style="font-size:14px;font-weight:700;color:var(--text)">${item.strain}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text)">${strainWithCode(item.strain)}</div>
           <div style="font-size:11px;color:var(--text3)">${item.roomName}${item.harvestDate?' · '+(new Date(item.harvestDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||item.harvestDate):''}${item.archived?' · <span style="color:var(--green)">archived</span>':''}${!ranked?' · No THC reading yet':''}</div>
         </div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
@@ -5560,7 +6013,7 @@ function renderMetrcMothers(){
     const clones=clonesByStrain[strain]||0;
     const bc=d.count>=8?'var(--green)':d.count>=4?'var(--amber)':'var(--red)';
     return '<div class="card" style="border-left:3px solid '+bc+'">'
-      +'<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">'+strain+'</div>'
+      +'<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">'+strainWithCode(strain)+'</div>'
       +'<div style="font-size:24px;font-weight:700;font-family:var(--mono);color:'+bc+';margin-bottom:2px">'+d.count+'</div>'
       +'<div style="font-size:11px;color:var(--text3);margin-bottom:8px">mother'+(d.count!==1?'s':'')+'</div>'
       +'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">'+locParts+'</div>'
@@ -5592,7 +6045,7 @@ function renderMetrcClones(){
     const mc=mothersByStrain[strain]||0;
     const dates=d.batches.map(b=>b['Batch Date']||'').filter(Boolean).sort().reverse();
     return '<div class="card" style="border-left:3px solid var(--blue)">'
-      +'<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">'+strain+'</div>'
+      +'<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">'+strainWithCode(strain)+'</div>'
       +'<div style="font-size:24px;font-weight:700;font-family:var(--mono);color:var(--blue);margin-bottom:2px">'+d.totalPlants+'</div>'
       +'<div style="font-size:11px;color:var(--text3);margin-bottom:8px">clones \u00b7 '+d.batches.length+' batch'+(d.batches.length!==1?'es':'')+'</div>'
       +(mc?'<div style="font-size:11px;color:var(--green)">\ud83c\udf3f '+mc+' mother'+(mc!==1?'s':'')+' active</div>':'<div style="font-size:11px;color:var(--amber)">\u26a0 No mothers on record</div>')
@@ -5604,52 +6057,79 @@ function renderMetrcClones(){
 function renderMetrcStrains(){
   const grid=document.getElementById('metrc-strains-grid');
   if(!grid)return;
+  const motherRows=metrcData.mother||[];
+  const cloneRows=metrcData.immature||[];
   const vegRows=metrcData.vegetative||[];
   const flowerRows=metrcData.flowering||[];
-  if(!vegRows.length&&!flowerRows.length){
-    grid.innerHTML='<div class="empty-state" style="grid-column:1/-1">Upload the Vegetative and Flowering exports to see strain data.</div>';
+  if(!motherRows.length && !cloneRows.length && !vegRows.length && !flowerRows.length){
+    grid.innerHTML='<div class="empty-state" style="grid-column:1/-1">Upload Mother / Immature / Vegetative / Flowering exports to see all strains in the building.</div>';
     return;
   }
   const byStrain={};
+  const ensure=(s)=>{ if(!byStrain[s]) byStrain[s]={mother:0,motherLocs:{},clone:0,cloneLocs:{},veg:0,vegLocs:{},flower:0,flowerLocs:{}}; return byStrain[s]; };
+  motherRows.forEach(r=>{
+    const s=r['Strain']||r['StrainName']||r['Strain Name']||'Unknown';
+    const loc=r['Location']||r['LocationName']||r['Location Name']||'Unknown';
+    const d=ensure(s); d.mother++; d.motherLocs[loc]=(d.motherLocs[loc]||0)+1;
+  });
+  cloneRows.forEach(r=>{
+    const s=r['Strain']||r['StrainName']||r['Strain Name']||'Unknown';
+    const loc=r['Location']||r['LocationName']||r['Location Name']||'Unknown';
+    const cnt=parseInt(r['Plants']||r['Plant Count']||r['PlantCount']||r['# Plants']||r['Count']||0)||0;
+    const d=ensure(s); d.clone+=cnt; if(cnt) d.cloneLocs[loc]=(d.cloneLocs[loc]||0)+cnt;
+  });
   vegRows.forEach(r=>{
     const s=r['Strain']||r['StrainName']||r['Strain Name']||'Unknown';
     const loc=r['Location']||r['LocationName']||r['Location Name']||'Unknown';
-    if(!byStrain[s])byStrain[s]={veg:0,vegLocs:{},flower:0,flowerLocs:{}};
-    byStrain[s].veg++;
-    byStrain[s].vegLocs[loc]=(byStrain[s].vegLocs[loc]||0)+1;
+    const d=ensure(s); d.veg++; d.vegLocs[loc]=(d.vegLocs[loc]||0)+1;
   });
   flowerRows.forEach(r=>{
     const s=r['Strain']||r['StrainName']||r['Strain Name']||'Unknown';
     const loc=r['Location']||r['LocationName']||r['Location Name']||'Unknown';
-    if(!byStrain[s])byStrain[s]={veg:0,vegLocs:{},flower:0,flowerLocs:{}};
-    byStrain[s].flower++;
-    byStrain[s].flowerLocs[loc]=(byStrain[s].flowerLocs[loc]||0)+1;
+    const d=ensure(s); d.flower++; d.flowerLocs[loc]=(d.flowerLocs[loc]||0)+1;
   });
+  const totalMother=motherRows.length;
+  const totalClone=Object.values(byStrain).reduce((a,d)=>a+d.clone,0);
   const totalVeg=vegRows.length;
   const totalFlower=flowerRows.length;
   const _sq=(document.getElementById('metrc-strain-search')?.value||'').toLowerCase().trim();
-  const strains=Object.keys(byStrain).filter(s=>!_sq||s.toLowerCase().includes(_sq)).sort((a,b)=>a.localeCompare(b));
-  const summary='<div style="grid-column:1/-1;display:flex;gap:24px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);margin-bottom:8px;flex-wrap:wrap">'
-    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--blue)">'+totalVeg+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Veg plants</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].veg>0).length+' strains</div></div></div>'
-    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--green)">'+totalFlower+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Flowering plants</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].flower>0).length+' strains</div></div></div>'
+  const strains=Object.keys(byStrain).filter(s=>!_sq||s.toLowerCase().includes(_sq)||(strainCodeOnly(s)||'').toLowerCase().includes(_sq)).sort((a,b)=>a.localeCompare(b));
+  const summary='<div style="grid-column:1/-1;display:flex;gap:18px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);margin-bottom:8px;flex-wrap:wrap">'
+    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--purple)">'+totalMother+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Mothers</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].mother>0).length+' strains</div></div></div>'
+    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#06b6d4">'+totalClone+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Clones</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].clone>0).length+' strains</div></div></div>'
+    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--blue)">'+totalVeg+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Veg</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].veg>0).length+' strains</div></div></div>'
+    +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--green)">'+totalFlower+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Flowering</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].flower>0).length+' strains</div></div></div>'
     +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--text)">'+strains.length+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Total strains</div></div></div>'
     +'</div>';
   const cards=strains.map(strain=>{
     const d=byStrain[strain];
     const isUnk=strain==='Unknown';
-    const accent=isUnk?'var(--text3)':d.flower>0?'var(--green)':'var(--blue)';
+    // Accent color: pick the most-active stage (flower > veg > clone > mother) for at-a-glance status
+    let accent=isUnk?'var(--text3)':'var(--text3)';
+    if(d.flower>0) accent='var(--green)';
+    else if(d.veg>0) accent='var(--blue)';
+    else if(d.clone>0) accent='#06b6d4';
+    else if(d.mother>0) accent='var(--purple)';
+    const motherLocs=Object.entries(d.motherLocs).sort((a,b)=>b[1]-a[1])
+      .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:rgba(168,85,247,0.13);border:1px solid var(--purple);border-radius:var(--r);font-family:var(--mono);color:var(--purple)">'+e[0].replace('Mothers Room','Mothers').replace('Mother Room','Mothers')+' \u00b7 '+e[1]+'</span>';}).join('');
+    const cloneLocs=Object.entries(d.cloneLocs).sort((a,b)=>b[1]-a[1])
+      .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:rgba(6,182,212,0.13);border:1px solid #06b6d4;border-radius:var(--r);font-family:var(--mono);color:#06b6d4">'+e[0].replace('Clone Room','Clones').replace('Cloner','Clones')+' \u00b7 '+e[1]+'</span>';}).join('');
     const vegLocs=Object.entries(d.vegLocs).sort((a,b)=>b[1]-a[1])
-      .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:var(--blue-dim);border:1px solid var(--blue);border-radius:var(--r);font-family:var(--mono);color:var(--blue)">'+e[0].replace('Veg Room ','Veg ').replace('Mother Room','Mothers')+' \u00b7 '+e[1]+'</span>';}).join('');
+      .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:var(--blue-dim);border:1px solid var(--blue);border-radius:var(--r);font-family:var(--mono);color:var(--blue)">'+e[0].replace('Veg Room ','Veg ')+' \u00b7 '+e[1]+'</span>';}).join('');
     const flowerLocs=Object.entries(d.flowerLocs).sort((a,b)=>b[1]-a[1])
       .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:var(--green-bg);border:1px solid var(--green-dim);border-radius:var(--r);font-family:var(--mono);color:var(--green)">'+e[0].replace('Grow Room ','R').replace('Flower Room ','R')+' \u00b7 '+e[1]+'</span>';}).join('');
     let html='<div class="card" style="border-left:3px solid '+accent+'">';
-    html+='<div style="font-size:14px;font-weight:700;color:'+(isUnk?'var(--text3)':'var(--text)')+';font-style:'+(isUnk?'italic':'normal')+';margin-bottom:6px">'+strain+'</div>';
-    html+='<div style="display:flex;gap:16px;margin-bottom:8px">';
+    html+='<div style="font-size:14px;font-weight:700;color:'+(isUnk?'var(--text3)':'var(--text)')+';font-style:'+(isUnk?'italic':'normal')+';margin-bottom:6px">'+strainWithCode(strain)+'</div>';
+    html+='<div style="display:flex;gap:14px;margin-bottom:8px;flex-wrap:wrap">';
     if(d.flower>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--green)">'+d.flower+'</div><div style="font-size:10px;color:var(--text3)">flowering</div></div>';
     if(d.veg>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--blue)">'+d.veg+'</div><div style="font-size:10px;color:var(--text3)">veg</div></div>';
+    if(d.clone>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#06b6d4">'+d.clone+'</div><div style="font-size:10px;color:var(--text3)">clones</div></div>';
+    if(d.mother>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--purple)">'+d.mother+'</div><div style="font-size:10px;color:var(--text3)">mother'+(d.mother!==1?'s':'')+'</div></div>';
     html+='</div>';
-    if(flowerLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px">'+flowerLocs+'</div>';
-    if(vegLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px">'+vegLocs+'</div>';
+    if(flowerLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:3px">'+flowerLocs+'</div>';
+    if(vegLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:3px">'+vegLocs+'</div>';
+    if(cloneLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:3px">'+cloneLocs+'</div>';
+    if(motherLocs) html+='<div style="display:flex;flex-wrap:wrap;gap:3px">'+motherLocs+'</div>';
     html+='</div>';
     return html;
   }).join('');
