@@ -413,6 +413,7 @@ button { cursor: pointer; }
   <button class="nav-tab" onclick="showPage('today-log')" data-page="today-log" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Today's Log</button>
   <button class="nav-tab" onclick="showPage('calendar')" data-page="calendar" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Calendar</button>
   <button class="nav-tab" onclick="showPage('additive')" data-page="additive" data-roles="lead,fertigator">Additive Schedule</button>
+  <button class="nav-tab" onclick="showPage('ipm')" data-page="ipm" data-roles="lead,ipm">IPM Schedule</button>
   <button class="nav-tab" onclick="showPage('checks')" data-page="checks" data-roles="lead,checker,ipm">Room Checks</button>
   <button class="nav-tab" onclick="showPage('slack')" data-page="slack" data-roles="lead">Slack Dispatch</button>
   <button class="nav-tab" onclick="showPage('daily-review')" data-page="daily-review" data-roles="lead">Daily Review</button>
@@ -667,6 +668,40 @@ button { cursor: pointer; }
         <thead><tr><th>Day</th><th>Phase</th><th>Additive</th><th>Dose</th><th>Channel</th><th>Notes</th></tr></thead>
         <tbody id="additive-tbody"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- ══ PAGE: IPM SCHEDULE ══ -->
+  <div id="page-ipm" class="page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h1 style="font-size:22px;font-weight:700;margin:0">IPM Schedule</h1>
+        <div style="font-size:12px;color:var(--text2);margin-top:3px">Define spray rotations. The IPM tech sees due tasks in My Tasks each day.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="nav-tab active" onclick="showIpmTab('rules',this)" style="font-size:12px">Rules</button>
+        <button class="nav-tab" onclick="showIpmTab('history',this)" style="font-size:12px">History</button>
+      </div>
+    </div>
+
+    <div id="ipmsub-rules">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px;color:var(--text2)">Active spray rules. Toggle on/off, edit, or remove.</div>
+        <button onclick="openIpmRuleEditor()" class="btn-primary" style="font-size:12px;padding:6px 14px">+ New rule</button>
+      </div>
+      <div id="ipm-rules-list"></div>
+    </div>
+
+    <div id="ipmsub-history" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px;color:var(--text2)">All sprays + skips. Most recent first.</div>
+        <select id="ipm-history-filter" onchange="renderIpmHistory()" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
+          <option value="all">All entries</option>
+          <option value="done">Done only</option>
+          <option value="skipped">Skipped only</option>
+        </select>
+      </div>
+      <div id="ipm-history-list"></div>
     </div>
   </div>
 
@@ -1756,6 +1791,13 @@ function renderAssignments(){
       const isDone=overrides['done_'+task.id];
       const isSkipped=overrides['skip_'+task.id];
       if(isSkipped) return '';
+      const isIpm=task.id&&task.id.indexOf('ipm_')===0&&task.ipmRuleId;
+      const doneBtn=isIpm
+        ?'<button class="complete-btn" onclick="markIpmDone(\''+task.ipmRuleId+'\',\''+group.roomId+'\',\''+task.ipmDueDate+'\',\'\')">Mark done</button>'
+        :`<button class="complete-btn" onclick="openModal('${group.roomId}','${task.id}','${task.name} — ${group.roomName}')">Mark done</button>`;
+      const skipBtn=isIpm
+        ?'<button class="skip-btn" onclick="markIpmSkip(\''+task.ipmRuleId+'\',\''+group.roomId+'\',\''+task.ipmDueDate+'\',\'\')">Skip</button>'
+        :`<button class="skip-btn" onclick="skipTask('${group.roomId}','${task.id}')">Skip</button>`;
       return`<div class="assign-task">
         <div class="assign-task-info">
           <div class="assign-task-name" style="${isDone?'text-decoration:line-through;color:var(--text3)':''}">${task.name}</div>
@@ -1763,8 +1805,8 @@ function renderAssignments(){
           ${task.sub?`<div class="assign-task-sub">${task.sub}</div>`:''}
         </div>
         <div style="display:flex;gap:5px;flex-direction:column;align-items:flex-end">
-          ${!isDone?`<button class="complete-btn" onclick="openModal('${group.roomId}','${task.id}','${task.name} — ${group.roomName}')">Mark done</button>`:`<button class="complete-btn done" disabled>Done</button>`}
-          ${!isDone?`<button class="skip-btn" onclick="skipTask('${group.roomId}','${task.id}')">Skip</button>`:''}
+          ${!isDone?doneBtn:'<button class="complete-btn done" disabled>Done</button>'}
+          ${!isDone?skipBtn:''}
         </div>
       </div>`;
     }).join('');
@@ -1882,7 +1924,347 @@ function buildAssignments(role){
     groups.push({roomId:room.id,roomName:room.name,stageLine,badge,badgeCls,tasks});
   });
 
+  // IPM rotation tasks: only for IPM role and lead. One card per room per due rule.
+  if(role==='ipm' || role==='lead'){
+    const ipmTasks=(typeof getIpmTasksForToday==='function')?getIpmTasksForToday():[];
+    const byRoom={};
+    ipmTasks.forEach(t=>{
+      const room=rooms.find(r=>r.id===t.roomId);
+      if(!room) return;
+      if(!byRoom[t.roomId]){
+        byRoom[t.roomId]={roomId:t.roomId, roomName:room.name, tasks:[]};
+      }
+      const overdueLabel=t.daysOverdue>0?' ('+t.daysOverdue+'d overdue)':'';
+      byRoom[t.roomId].tasks.push({
+        id:'ipm_'+t.rule.id+'_'+t.dueDate,
+        ipmRuleId:t.rule.id,
+        ipmDueDate:t.dueDate,
+        name:(t.rule.product||'IPM')+' — '+room.name+overdueLabel,
+        desc:(t.rule.dose?'Dose: '+t.rule.dose:'')+(t.rule.notes?(t.rule.dose?' · ':'')+t.rule.notes:''),
+        sub:t.rule.name?'Rule: '+t.rule.name:'',
+      });
+    });
+    Object.values(byRoom).forEach(g=>{
+      groups.unshift({
+        roomId:g.roomId, roomName:g.roomName,
+        stageLine:'IPM rotation', badge:'IPM', badgeCls:'tag-blue',
+        tasks:g.tasks
+      });
+    });
+  }
+
   return groups;
+}
+
+// ══════════════════════════════════════════════
+// IPM SCHEDULE — rule-based spray rotation
+// ══════════════════════════════════════════════
+let ipmRules=L('wg_ipm_rules',[]);
+let ipmLog=L('wg_ipm_log',[]);
+
+function isIpmRuleDueOn(rule, date){
+  if(!rule.active) return null;
+  const dateIso=date.toISOString().split('T')[0];
+  const startIso=rule.startDate||dateIso;
+  if(dateIso<startIso) return null;
+  if(rule.cadenceType==='every_n'){
+    const startDate=new Date(startIso+'T00:00:00');
+    const diffDays=Math.floor((date - startDate)/86400000);
+    if(diffDays<0) return null;
+    if(diffDays % (rule.every||1) !== 0) return null;
+    return {dueDate:dateIso};
+  }
+  if(rule.cadenceType==='weekdays'){
+    const dow=date.getDay();
+    if(!Array.isArray(rule.weekdays)) return null;
+    if(!rule.weekdays.includes(dow)) return null;
+    return {dueDate:dateIso};
+  }
+  if(rule.cadenceType==='dates'){
+    if(!Array.isArray(rule.dates)) return null;
+    if(!rule.dates.includes(dateIso)) return null;
+    return {dueDate:dateIso};
+  }
+  return null;
+}
+
+function ipmRuleHandledOn(rule, dateIso, roomId){
+  return ipmLog.some(l => l.ruleId===rule.id && l.date===dateIso && (!roomId || l.roomId===roomId));
+}
+
+function getIpmTasksForToday(){
+  ipmRules=L('wg_ipm_rules',[]);
+  ipmLog=L('wg_ipm_log',[]);
+  const out=[];
+  ipmRules.forEach(rule=>{
+    if(!rule.active) return;
+    if(!Array.isArray(rule.rooms) || !rule.rooms.length) return;
+    for(let back=0; back<=7; back++){
+      const d=new Date(TODAY); d.setDate(d.getDate()-back);
+      const due=isIpmRuleDueOn(rule, d);
+      if(!due) continue;
+      rule.rooms.forEach(roomId=>{
+        if(ipmRuleHandledOn(rule, due.dueDate, roomId)) return;
+        out.push({rule, roomId, dueDate:due.dueDate, daysOverdue:back});
+      });
+    }
+  });
+  out.sort((a,b)=>{
+    if(a.daysOverdue!==b.daysOverdue) return b.daysOverdue-a.daysOverdue;
+    return (a.rule.name||'').localeCompare(b.rule.name||'');
+  });
+  return out;
+}
+
+function markIpmDone(ruleId, roomId, dueDate, note){
+  const rule=ipmRules.find(r=>r.id===ruleId);
+  if(!rule) return;
+  ipmLog.push({
+    id:Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    ruleId, ruleName:rule.name||'', product:rule.product||'',
+    roomId, dueDate, date:dueDate,
+    status:'done', who:loggedInMember?loggedInMember.name:'Unknown',
+    note:note||'', completedAt:new Date().toISOString()
+  });
+  S('wg_ipm_log', ipmLog);
+  pushConfigDebounced();
+  postToSheet('IPM_Log',[dueDate, fmtTime(), loggedInMember?loggedInMember.name:'Unknown', rule.name||'', rule.product||'', roomId, 'done', note||'']);
+  renderAssignments();
+  if(typeof renderIpmRules==='function') renderIpmRules();
+  if(typeof renderIpmHistory==='function') renderIpmHistory();
+}
+
+function markIpmSkip(ruleId, roomId, dueDate, reason){
+  const rule=ipmRules.find(r=>r.id===ruleId);
+  if(!rule) return;
+  if(!reason){
+    reason=prompt('Reason for skipping (optional):','')||'';
+  }
+  ipmLog.push({
+    id:Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    ruleId, ruleName:rule.name||'', product:rule.product||'',
+    roomId, dueDate, date:dueDate,
+    status:'skipped', who:loggedInMember?loggedInMember.name:'Unknown',
+    note:reason||'', completedAt:new Date().toISOString()
+  });
+  S('wg_ipm_log', ipmLog);
+  pushConfigDebounced();
+  postToSheet('IPM_Log',[dueDate, fmtTime(), loggedInMember?loggedInMember.name:'Unknown', rule.name||'', rule.product||'', roomId, 'skipped', reason||'']);
+  renderAssignments();
+  if(typeof renderIpmHistory==='function') renderIpmHistory();
+}
+
+function openIpmRuleEditor(ruleId){
+  const editing=ruleId?ipmRules.find(r=>r.id===ruleId):null;
+  const rule=editing?{...editing}:{
+    id:'rule_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    name:'', product:'', dose:'', rooms:[],
+    cadenceType:'every_n', every:2, weekdays:[], dates:[],
+    startDate:dateToIso(TODAY), active:true, notes:''
+  };
+  const modal=document.createElement('div');
+  modal.className='modal-bg active';
+  modal.id='ipm-rule-modal';
+  const allRooms=rooms.filter(r=>r.id);
+  const roomChecks=allRooms.map(r=>{
+    const checked=rule.rooms.includes(r.id);
+    return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+           '<input type="checkbox" data-room="'+r.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+
+           r.name+'</label>';
+  }).join('');
+  const dayLabels=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const weekdayChecks=dayLabels.map(function(lbl,i){
+    const checked=rule.weekdays&&rule.weekdays.includes(i);
+    return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+           '<input type="checkbox" data-dow="'+i+'" '+(checked?'checked':'')+' style="margin:0"/>'+
+           lbl+'</label>';
+  }).join('');
+  const ct=rule.cadenceType;
+  const html='<div class="modal" style="max-width:560px">'+
+    '<div class="modal-head"><div class="modal-title">'+(editing?'Edit':'New')+' IPM rule</div>'+
+    '<button class="modal-close" onclick="closeIpmRuleEditor()">×</button></div>'+
+    '<div class="modal-body" style="padding:18px"><div style="display:grid;gap:12px">'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Rule name</label>'+
+    '<input id="ipm-rule-name" value="'+(rule.name||'').replace(/"/g,'&quot;')+'" placeholder="e.g. Oxiphos in mother + veg" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Product</label>'+
+    '<input id="ipm-rule-product" value="'+(rule.product||'').replace(/"/g,'&quot;')+'" placeholder="Oxiphos / SuffOil-X / Athena IPM / Milstop" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div>'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Dose / mix</label>'+
+    '<input id="ipm-rule-dose" value="'+(rule.dose||'').replace(/"/g,'&quot;')+'" placeholder="1 tsp/gal · ~½ gal/room" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div></div>'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Rooms</label>'+
+    '<div id="ipm-rule-rooms" style="display:flex;flex-wrap:wrap;gap:5px">'+roomChecks+'</div></div>'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Cadence</label>'+
+    '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">'+
+    '<button onclick="setIpmCadenceType(\'every_n\')" id="ipm-cad-every_n" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:'+(ct==='every_n'?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">Every N days</button>'+
+    '<button onclick="setIpmCadenceType(\'weekdays\')" id="ipm-cad-weekdays" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:'+(ct==='weekdays'?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">Specific weekdays</button>'+
+    '<button onclick="setIpmCadenceType(\'dates\')" id="ipm-cad-dates" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:'+(ct==='dates'?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">Specific dates</button></div>'+
+    '<div id="ipm-cad-every_n-block" style="display:'+(ct==='every_n'?'flex':'none')+';gap:8px;align-items:center">'+
+    '<span style="font-size:12px;color:var(--text2)">Every</span>'+
+    '<input id="ipm-rule-every" type="number" min="1" max="60" value="'+(rule.every||2)+'" style="width:60px;font-size:13px;padding:6px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);text-align:center"/>'+
+    '<span style="font-size:12px;color:var(--text2)">days starting</span>'+
+    '<input id="ipm-rule-start" type="date" value="'+(rule.startDate||dateToIso(TODAY))+'" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)"/></div>'+
+    '<div id="ipm-cad-weekdays-block" style="display:'+(ct==='weekdays'?'flex':'none')+';flex-wrap:wrap;gap:5px">'+weekdayChecks+'</div>'+
+    '<div id="ipm-cad-dates-block" style="display:'+(ct==='dates'?'block':'none')+'">'+
+    '<textarea id="ipm-rule-dates" placeholder="One date per line: 2026-05-12" style="width:100%;min-height:60px;font-size:12px;padding:8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;font-family:var(--mono)">'+(rule.dates||[]).join('\n')+'</textarea></div></div>'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Notes</label>'+
+    '<textarea id="ipm-rule-notes" style="width:100%;min-height:50px;font-size:12px;padding:8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box">'+(rule.notes||'').replace(/</g,'&lt;')+'</textarea></div>'+
+    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">'+
+    '<input id="ipm-rule-active" type="checkbox" '+(rule.active!==false?'checked':'')+'/>Active</label></div>'+
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">'+
+    (editing?'<button onclick="deleteIpmRule(\''+rule.id+'\')" style="font-size:12px;padding:7px 14px;border-radius:var(--r);border:1px solid var(--red-bg);background:none;color:var(--red);cursor:pointer">Delete</button>':'')+
+    '<button onclick="closeIpmRuleEditor()" style="font-size:12px;padding:7px 14px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">Cancel</button>'+
+    '<button onclick="saveIpmRule(\''+rule.id+'\')" class="btn-primary" style="font-size:12px;padding:7px 14px">Save</button></div></div></div>';
+  modal.innerHTML=html;
+  document.body.appendChild(modal);
+}
+
+function setIpmCadenceType(type){
+  ['every_n','weekdays','dates'].forEach(t=>{
+    const btn=document.getElementById('ipm-cad-'+t);
+    if(btn) btn.style.background = (t===type) ? 'var(--blue-bg)' : 'var(--bg3)';
+    const blk=document.getElementById('ipm-cad-'+t+'-block');
+    if(blk) blk.style.display = (t===type) ? (t==='dates'?'block':'flex') : 'none';
+  });
+}
+
+function closeIpmRuleEditor(){
+  const m=document.getElementById('ipm-rule-modal');
+  if(m) m.remove();
+}
+
+function saveIpmRule(ruleId){
+  ipmRules=L('wg_ipm_rules',[]);
+  const existing=ipmRules.find(r=>r.id===ruleId);
+  const rule=existing||{id:ruleId};
+  rule.name=document.getElementById('ipm-rule-name').value.trim();
+  rule.product=document.getElementById('ipm-rule-product').value.trim();
+  rule.dose=document.getElementById('ipm-rule-dose').value.trim();
+  rule.notes=document.getElementById('ipm-rule-notes').value.trim();
+  rule.active=document.getElementById('ipm-rule-active').checked;
+  const rcs=document.querySelectorAll('#ipm-rule-rooms input[type="checkbox"]');
+  rule.rooms=[];
+  rcs.forEach(cb=>{ if(cb.checked) rule.rooms.push(cb.getAttribute('data-room')); });
+  if(document.getElementById('ipm-cad-every_n-block').style.display!=='none'){
+    rule.cadenceType='every_n';
+    rule.every=Math.max(1,parseInt(document.getElementById('ipm-rule-every').value)||1);
+    rule.startDate=document.getElementById('ipm-rule-start').value||dateToIso(TODAY);
+  } else if(document.getElementById('ipm-cad-weekdays-block').style.display!=='none'){
+    rule.cadenceType='weekdays';
+    const wcs=document.querySelectorAll('#ipm-cad-weekdays-block input[type="checkbox"]');
+    rule.weekdays=[];
+    wcs.forEach(cb=>{ if(cb.checked) rule.weekdays.push(parseInt(cb.getAttribute('data-dow'))); });
+  } else {
+    rule.cadenceType='dates';
+    const txt=document.getElementById('ipm-rule-dates').value;
+    rule.dates=txt.split(/[\n,]/).map(s=>s.trim()).filter(s=>/^\d{4}-\d{2}-\d{2}$/.test(s));
+  }
+  if(!rule.name){alert('Rule name is required');return;}
+  if(!rule.product){alert('Product is required');return;}
+  if(!rule.rooms.length){alert('Select at least one room');return;}
+  if(rule.cadenceType==='weekdays' && !rule.weekdays.length){alert('Select at least one weekday');return;}
+  if(rule.cadenceType==='dates' && !rule.dates.length){alert('Add at least one date');return;}
+  if(!existing) ipmRules.push(rule);
+  S('wg_ipm_rules', ipmRules);
+  pushConfigDebounced();
+  closeIpmRuleEditor();
+  renderIpmRules();
+  renderAssignments();
+}
+
+function deleteIpmRule(ruleId){
+  if(!confirm('Delete this rule? History entries are kept.'))return;
+  ipmRules=L('wg_ipm_rules',[]).filter(r=>r.id!==ruleId);
+  S('wg_ipm_rules', ipmRules);
+  pushConfigDebounced();
+  closeIpmRuleEditor();
+  renderIpmRules();
+  renderAssignments();
+}
+
+function toggleIpmRule(ruleId){
+  ipmRules=L('wg_ipm_rules',[]);
+  const r=ipmRules.find(x=>x.id===ruleId);
+  if(!r) return;
+  r.active=!r.active;
+  S('wg_ipm_rules', ipmRules);
+  pushConfigDebounced();
+  renderIpmRules();
+  renderAssignments();
+}
+
+function renderIpmRules(){
+  ipmRules=L('wg_ipm_rules',[]);
+  const list=document.getElementById('ipm-rules-list');
+  if(!list) return;
+  if(!ipmRules.length){
+    list.innerHTML='<div class="empty-state">No rules yet. Click "+ New rule" to create one.</div>';
+    return;
+  }
+  const sorted=[...ipmRules].sort((a,b)=>{
+    if(a.active!==b.active) return a.active?-1:1;
+    return (a.name||'').localeCompare(b.name||'');
+  });
+  list.innerHTML=sorted.map(r=>{
+    const roomNames=r.rooms.map(rid=>(rooms.find(rm=>rm.id===rid)||{}).name||rid).join(', ');
+    let cadDesc='';
+    if(r.cadenceType==='every_n'){ cadDesc='Every '+(r.every||1)+' days from '+(r.startDate||'?'); }
+    else if(r.cadenceType==='weekdays'){ const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; cadDesc=(r.weekdays||[]).map(i=>days[i]).join(', ')||'no days'; }
+    else if(r.cadenceType==='dates'){ cadDesc='Specific dates ('+(r.dates||[]).length+')'; }
+    return '<div class="card" style="border-left:3px solid '+(r.active?'var(--green)':'var(--text3)')+';margin-bottom:8px;'+(r.active?'':'opacity:0.6')+'">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+      '<div style="flex:1;min-width:200px">'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+      '<div style="font-size:14px;font-weight:700;color:var(--text)">'+(r.name||'(unnamed)')+'</div>'+
+      '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:rgba(168,85,247,0.15);color:var(--purple);font-weight:600">'+(r.product||'?')+'</span>'+
+      (r.active?'':'<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:var(--bg3);color:var(--text3);font-weight:600">paused</span>')+
+      '</div>'+
+      '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+(roomNames||'no rooms')+' · '+cadDesc+'</div>'+
+      (r.dose?'<div style="font-size:11px;color:var(--text2);margin-top:3px">Dose: '+r.dose+'</div>':'')+
+      (r.notes?'<div style="font-size:11px;color:var(--text2);margin-top:3px;padding:4px 6px;background:var(--bg3);border-radius:var(--r)">'+r.notes+'</div>':'')+
+      '</div>'+
+      '<div style="display:flex;gap:5px;flex-shrink:0">'+
+      '<button onclick="toggleIpmRule(\''+r.id+'\')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">'+(r.active?'Pause':'Resume')+'</button>'+
+      '<button onclick="openIpmRuleEditor(\''+r.id+'\')" style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">Edit</button>'+
+      '</div></div></div>';
+  }).join('');
+}
+
+function renderIpmHistory(){
+  ipmLog=L('wg_ipm_log',[]);
+  const list=document.getElementById('ipm-history-list');
+  if(!list) return;
+  const filter=(document.getElementById('ipm-history-filter')||{}).value||'all';
+  let entries=[...ipmLog];
+  if(filter!=='all') entries=entries.filter(e=>e.status===filter);
+  entries.sort((a,b)=>(b.completedAt||'').localeCompare(a.completedAt||''));
+  if(!entries.length){
+    list.innerHTML='<div class="empty-state">No IPM activity logged yet.</div>';
+    return;
+  }
+  list.innerHTML=entries.slice(0,200).map(e=>{
+    const room=rooms.find(r=>r.id===e.roomId);
+    const ds=new Date(e.completedAt||e.date+'T12:00:00');
+    const dateStr=isNaN(ds)?(e.date||''):(ds.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+ds.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}));
+    const color=e.status==='done'?'var(--green)':'var(--amber)';
+    const icon=e.status==='done'?'✓':'⏭';
+    return '<div class="card" style="border-left:3px solid '+color+';margin-bottom:6px;padding:8px 12px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
+      '<div style="flex:1;min-width:180px">'+
+      '<div style="font-size:12px;font-weight:700;color:var(--text)">'+icon+' '+(e.product||e.ruleName||'?')+' · '+((room&&room.name)||e.roomId||'?')+'</div>'+
+      '<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(e.who||'?')+' · '+dateStr+(e.note?' · '+e.note:'')+'</div>'+
+      '</div>'+
+      '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:'+(e.status==='done'?'var(--green-bg)':'var(--bg3)')+';color:'+color+';font-weight:600">'+e.status+'</span>'+
+      '</div></div>';
+  }).join('');
+}
+
+function showIpmTab(tab,el){
+  document.querySelectorAll('#page-ipm .nav-tab').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('ipmsub-rules').style.display=tab==='rules'?'block':'none';
+  document.getElementById('ipmsub-history').style.display=tab==='history'?'block':'none';
+  if(tab==='rules') renderIpmRules();
+  if(tab==='history') renderIpmHistory();
 }
 
 // ══════════════════════════════════════════════
@@ -1904,51 +2286,119 @@ const STRAIN_TARGETS=[
 ];
 const WEEKLY_TARGET=450;
 
-function logCloneCut(clearStrain=false){
+async function logCloneCut(clearStrain=false,leadOverride=false){
   const strain=document.getElementById('ce-strain').value.trim();
   const motherTag=document.getElementById('ce-mother-tag')?.value.trim()||'';
   const count=parseInt(document.getElementById('ce-count').value)||0;
   const who=loggedInMember?loggedInMember.name:'Unknown';
-  if(!strain||!count)return;
-  // Validate mother tag against METRC data if available
-  let motherLabel='';
-  if(motherTag&&metrcData.mother.length){
-    const match=metrcData.mother.find(r=>(r['Tag']||'').endsWith(motherTag));
-    if(match){
-      motherLabel=match['Tag']||'';
-      // Verify strain matches
-      if(match['Strain']&&match['Strain'].toLowerCase()!==strain.toLowerCase()){
-        const hint=document.getElementById('ce-mother-hint');
-        if(hint) hint.style.color='var(--amber)';
-        if(hint) hint.textContent='⚠ Tag is '+match['Strain']+' not '+strain;
-      }
-    } else {
-      const hint=document.getElementById('ce-mother-hint');
-      if(hint){hint.textContent='Tag not found in mothers';hint.style.color='var(--amber)';}
+  const hint=document.getElementById('ce-mother-hint');
+  const setHint=(msg,color)=>{ if(hint){hint.textContent=msg||'';hint.style.color=color||'var(--text3)';} };
+
+  // ── Required fields ──
+  if(!strain){ setHint('⚠ Strain is required','var(--red)'); document.getElementById('ce-strain').focus(); return; }
+  if(!count){  setHint('⚠ Number of clones is required','var(--red)'); document.getElementById('ce-count').focus(); return; }
+
+  // ── Sanity check on count: typical cuts are <300; warn if 500+ which is more like a plant number ──
+  if(count>=300){
+    if(!confirm(`You're logging ${count} clones — that's unusually high. Did you mean to enter the plant number in this field by mistake? Click OK to proceed, Cancel to fix.`)){
+      document.getElementById('ce-count').focus();
+      return;
     }
   }
-  cloneSessions.push({strain,count,who,motherTag,motherLabel,time:fmtTime(),date:dateToIso(TODAY)});
+
+  // ── Mother tag required + must match METRC ──
+  if(!motherTag){
+    setHint('⚠ Mother tag (last 4) is required','var(--red)');
+    document.getElementById('ce-mother-tag').focus();
+    return;
+  }
+  if(motherTag.length<4){
+    setHint('⚠ Enter all 4 digits of the mother tag','var(--red)');
+    document.getElementById('ce-mother-tag').focus();
+    return;
+  }
+
+  let motherLabel='';
+  let validationFailed=null; // null if OK, or string explaining what's wrong
+
+  if(metrcData.mother && metrcData.mother.length){
+    // Match all mothers ending in this tag (typically 1, but could be 0 or >1)
+    const matches=metrcData.mother.filter(r=>(r['Tag']||'').endsWith(motherTag));
+    if(matches.length===0){
+      validationFailed='Tag …'+motherTag+' is not a registered mother in METRC.';
+    } else if(matches.length>1){
+      // Multiple matches — strain must disambiguate
+      const strainMatch=matches.find(m=>(m['Strain']||'').toLowerCase()===strain.toLowerCase());
+      if(!strainMatch){
+        validationFailed='Tag …'+motherTag+' matches '+matches.length+' mothers, none of strain "'+strain+'" — '+matches.map(m=>m['Strain']).join(', ');
+      } else {
+        motherLabel=strainMatch['Tag']||'';
+      }
+    } else {
+      motherLabel=matches[0]['Tag']||'';
+      const motherStrain=matches[0]['Strain']||'';
+      if(motherStrain && motherStrain.toLowerCase()!==strain.toLowerCase()){
+        validationFailed='Tag …'+motherTag+' is registered to "'+motherStrain+'", not "'+strain+'"';
+      }
+    }
+  } else {
+    validationFailed='METRC mother data not loaded — cannot validate. Upload latest Mother CSV in Settings.';
+  }
+
+  // ── Block on validation failure unless lead-override ──
+  if(validationFailed && !leadOverride){
+    if(hint){
+      hint.innerHTML='<span style="color:var(--red)">✗ '+validationFailed+'</span>'+
+        (currentRole==='lead'?' <button onclick="logCloneCut('+(clearStrain?'true':'false')+',true)" style="margin-left:6px;font-size:10px;padding:2px 7px;border-radius:var(--r);border:1px solid var(--amber);background:none;color:var(--amber);cursor:pointer">Override (lead)</button>':'');
+    }
+    return;
+  }
+  if(validationFailed && leadOverride){
+    motherLabel=motherLabel || ('OVERRIDE_'+motherTag);
+  }
+
+  // ── Append locally + sync ──
+  const session={strain,count,who,motherTag,motherLabel,time:fmtTime(),date:dateToIso(TODAY)};
+  if(leadOverride) session.override=true;
+  cloneSessions.push(session);
   S(getWeekKey(),cloneSessions);
   pushConfigToCloud(true); // immediate — clone saves must sync right away
-  postToSheet('Clone_Log',[dateToIso(TODAY),fmtTime(),who,strain,count,motherTag,motherLabel]);
-  // Always clear count and mother tag
+  renderCloneTracker();
+
+  // ── Sheet write WITH success confirmation ──
+  setHint('Saving to sheet…','var(--text3)');
+  const result=await postToSheet('Clone_Log',[dateToIso(TODAY),fmtTime(),who,strain,count,motherTag,motherLabel]);
+  if(!result.ok){
+    setHint('⚠ Sheet write failed — saved locally only. Click here to retry.','var(--amber)');
+    if(hint){
+      hint.style.cursor='pointer';
+      hint.onclick=async ()=>{
+        setHint('Retrying…','var(--text3)');
+        const r2=await postToSheet('Clone_Log',[session.date,session.time,session.who,session.strain,session.count,session.motherTag,session.motherLabel]);
+        if(r2.ok){ setHint('✓ Saved on retry','var(--green)'); hint.onclick=null; hint.style.cursor=''; setTimeout(()=>setHint(''),3000); }
+        else { setHint('⚠ Still failed — check Settings → Apps Script URL. Tap to retry.','var(--red)'); }
+      };
+    }
+    // Don't clear the form on failure — let user retry without re-typing
+    return;
+  }
+
+  // ── Success — clear form and refocus ──
+  setHint('✓ Saved','var(--green)');
+  setTimeout(()=>setHint(''),2500);
   if(document.getElementById('ce-mother-tag')) document.getElementById('ce-mother-tag').value='';
   document.getElementById('ce-count').value='';
   const box=document.getElementById('strain-autocomplete');
   if(box) box.style.display='none';
-  const hint=document.getElementById('ce-mother-hint');
-  if(hint) hint.textContent='';
   if(clearStrain){
     document.getElementById('ce-strain').value='';
     const panel=document.getElementById('clone-strain-info');
     if(panel) panel.style.display='none';
   }
-  // Refocus on count field for same strain, strain field for new strain
   setTimeout(()=>{
     const focusEl=document.getElementById(clearStrain?'ce-strain':'ce-count');
     if(focusEl) focusEl.focus();
   },50);
-  renderCloneTracker();
 }
 
 function resetCloneWeek(){
@@ -3231,6 +3681,7 @@ const ALL_PAGES=[
   {key:'clonetracker',label:'Clone Tracker'},
   {key:'today-log',label:'Today\'s Log'},
   {key:'additive',label:'Additive Schedule'},
+  {key:'ipm',label:'IPM Schedule'},
   {key:'checks',label:'Room Checks'},
   {key:'slack',label:'Slack Dispatch'},
   {key:'settings',label:'Settings'},
@@ -4132,6 +4583,7 @@ function showPage(page){
   document.querySelector(`.nav-tab[data-page="${page}"]`)?.classList.add('active');
   if(page==='settings') renderSettings();
   if(page==='additive') renderAdditiveTable();
+  if(page==='ipm') renderIpmRules();
   if(page==='slack') renderSlackPanels();
   if(page==='assignments') renderAssignments();
   if(page==='today-log') renderTodayLog();
@@ -4240,11 +4692,26 @@ async function testGsUrl(){
   }catch(e){if(st){st.textContent='✗ '+e.message;st.style.color='var(--red)';}}
 }
 async function postToSheet(sheetName,rowData){
-  if(!gsUrl)return;
+  if(!gsUrl) return {ok:false,error:'no gsUrl configured'};
   try{
-    await fetch(gsUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sheet:sheetName,timestamp:new Date().toISOString(),row:rowData})});
-  }catch(e){console.warn('Sheet POST failed:',e);}
+    // text/plain content-type avoids CORS preflight on Apps Script web apps
+    // and still allows us to read the response (no-cors mode would hide it).
+    const res=await fetch(gsUrl,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({sheet:sheetName,timestamp:new Date().toISOString(),row:rowData})
+    });
+    if(!res.ok){
+      console.warn('[postToSheet] HTTP error',sheetName,res.status);
+      return {ok:false,error:'HTTP '+res.status};
+    }
+    let body=null;
+    try{ body=await res.json(); }catch(_){ /* response may not be JSON */ }
+    return {ok:true,body};
+  }catch(e){
+    console.warn('[postToSheet] network error',sheetName,e);
+    return {ok:false,error:String(e)};
+  }
 }
 
 async function pushMetrcToCloud(){
@@ -7496,6 +7963,8 @@ async function pushConfigToCloud(silent=false){
       approvedTakedowns:L('wg_approved_takedowns',{}),
       calendarRules:L('wg_cal_rules',[]),
       calendarEvents:L('wg_cal_events',[]),
+      ipmRules:L('wg_ipm_rules',[]),
+      ipmLog:L('wg_ipm_log',[]),
       syncedBy:loggedInMember?loggedInMember.name:'Unknown',
       syncedAt:new Date().toISOString(),
     }
@@ -7602,6 +8071,18 @@ async function pullConfigFromCloud(silent=false){
     if(d.calendarEvents&&Array.isArray(d.calendarEvents)){
       calendarEvents = d.calendarEvents;
       S('wg_cal_events', calendarEvents);
+    }
+    if(d.ipmRules&&Array.isArray(d.ipmRules)){
+      ipmRules = d.ipmRules;
+      S('wg_ipm_rules', ipmRules);
+    }
+    if(d.ipmLog&&Array.isArray(d.ipmLog)){
+      // Merge by id (append-only union, lead can prune via UI)
+      const localLog = L('wg_ipm_log',[]);
+      const seen = new Set(localLog.map(e=>e.id));
+      const merged = [...localLog, ...d.ipmLog.filter(e=>e&&e.id&&!seen.has(e.id))];
+      ipmLog = merged;
+      S('wg_ipm_log', ipmLog);
     }
 
     // Today logs — merge per day
