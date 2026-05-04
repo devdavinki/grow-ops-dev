@@ -2063,7 +2063,7 @@ function openIpmRuleEditor(ruleId){
     startDate:dateToIso(TODAY), active:true, notes:''
   };
   const modal=document.createElement('div');
-  modal.className='modal-bg active';
+  modal.className='modal-bg open';
   modal.id='ipm-rule-modal';
   const allRooms=rooms.filter(r=>r.id);
   const roomChecks=allRooms.map(r=>{
