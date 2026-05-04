@@ -1386,11 +1386,11 @@ function getAdditiveForRoom(room){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'], roomView:'full'},
+  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint'], roomView:'full'},
   defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
   fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','additive','checks','slack','metrc','supplies'], roomView:'basic'},
   cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
-  ipm:        {pages:['assignments','rooms','today-log','calendar','checks','additive'], roomView:'basic'},
+  ipm:        {pages:['assignments','rooms','today-log','calendar','checks','additive','ipm'], roomView:'basic'},
   checker:    {pages:['assignments','today-log','calendar','checks'], roomView:'none'},
   postprod:   {pages:['assignments','postprod','today-log','calendar','metrc'], roomView:'none'},
 };
@@ -3771,9 +3771,9 @@ function applyRolePerms(){
   // Always ensure new pages are present even on old cached rolePerms.
   // Every role (including non-leads) gets calendar so the team can view it.
   const ensurePages = {
-    lead:       ['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','checks','slack','settings','metrc','daily-review','supplies','blueprint'],
+    lead:       ['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint'],
     fertigator: ['supplies','additive','checks','slack','clonetracker','calendar'],
-    ipm:        ['additive','calendar'],
+    ipm:        ['additive','ipm','calendar'],
     cloner:     ['calendar'],
     defoliator: ['calendar'],
     checker:    ['calendar'],
