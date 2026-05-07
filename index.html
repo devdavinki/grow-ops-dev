@@ -215,12 +215,15 @@ body.pre-login .topbar { visibility: visible; }
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,.3); z-index: 200;
   align-items: center; justify-content: center; padding: 16px;
+  overflow-y: auto;
 }
 .modal-bg.open { display: flex; }
 .modal {
   background: var(--bg2); border: 1px solid var(--border2);
   border-radius: var(--r3); padding: 20px; width: 100%; max-width: 420px;
   box-shadow: var(--shadow-md);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 .modal h3 { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
 .modal label { font-size: 12px; color: var(--text3); display: block; margin-bottom: 4px; margin-top: 10px; }
@@ -426,7 +429,7 @@ button { cursor: pointer; }
 <div class="main">
 
   <!-- ══ PAGE: ROOMS ══ -->
-  <div id="page-rooms" class="page active">
+  <div id="page-rooms" class="page">
     <div class="row mb12">
       <div class="section-title">Room status</div>
       <div style="flex:1"></div>
@@ -661,7 +664,7 @@ button { cursor: pointer; }
       <span class="tag tag-amber">Tier 2 · #flower-rooms only</span>
     </div>
     <div class="card mb12" style="font-size:12px;color:var(--text2);line-height:1.7;border-left:3px solid var(--amber)">
-      Base: Athena ProLine Bloom throughout flower. <strong style="color:var(--red)">NO H₂O₂</strong> during weeks 5–7 and X1 phase. EC targets per EC Rainbow v1.0. Additive schedule does not move — missed day is a notification event, never a double-dose. Notes live in <span class="tag tag-amber" style="font-size:10px">#flower-rooms</span> only.
+      Base: Athena ProLine Bloom throughout flower. <strong style="color:var(--red)">NO H₂O₂</strong> during weeks 5–7 and X1 phase. EC targets per EC Rainbow v1.3.2. Additive schedule does not move — missed day is a notification event, never a double-dose. Notes live in <span class="tag tag-amber" style="font-size:10px">#flower-rooms</span> only.
     </div>
     <div style="overflow-x:auto">
       <table class="additive-table" id="additive-table">
@@ -687,7 +690,10 @@ button { cursor: pointer; }
     <div id="ipmsub-rules">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--text2)">Active spray rules. Toggle on/off, edit, or remove.</div>
-        <button onclick="openIpmRuleEditor()" class="btn-primary" style="font-size:12px;padding:6px 14px">+ New rule</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button onclick="pullConfigFromCloud(false).then(()=>{renderIpmRules();if(document.getElementById('ipm-history-list'))renderIpmHistory();})" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+          <button onclick="openIpmRuleEditor()" class="btn-primary" style="font-size:12px;padding:6px 14px">+ New rule</button>
+        </div>
       </div>
       <div id="ipm-rules-list"></div>
     </div>
@@ -902,6 +908,8 @@ button { cursor: pointer; }
       <label>Apps Script URL</label>
       <input id="gs-url-input" type="text" style="flex:1;min-width:260px;font-size:12px" placeholder="https://script.google.com/macros/s/..." value="" onchange="saveGsUrl(this.value)"/>
       <button onclick="testGsUrl()" class="send-btn green" style="font-size:12px;padding:6px 12px">Test</button>
+      <button onclick="pushGsUrlToCloud()" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text2);cursor:pointer" title="Immediately push this URL to cloud — bypasses the 2s debounce so other devices can pull it right away">Save to cloud</button>
+      <button onclick="pullGsUrlFromCloud()" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text2);cursor:pointer" title="Pull the URL stored in cloud config — use this if other devices are on a newer URL">Pull from cloud</button>
       <span id="gs-url-status" style="font-size:11px;color:var(--text3)"></span>
     </div>
     <div class="section-title" style="margin-top:20px;margin-bottom:10px">Slack webhooks</div>
@@ -1044,6 +1052,7 @@ button { cursor: pointer; }
         <div style="font-size:12px;color:var(--text3)">Tier 2 deviations — logged silently, reviewed each morning</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="clearDewpointAlerts()" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text2);cursor:pointer" title="Permanently delete all 'Dew point HIGH' alerts from the log. DP Spread alerts are kept.">Clear dewpoint alerts</button>
         <button onclick="clearOldAlerts()" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text2);cursor:pointer">Clear logs &gt;7 days</button>
         <button onclick="renderDailyReview()" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--green-dim);background:var(--green-bg);color:var(--green);cursor:pointer">↻ Refresh</button>
       </div>
@@ -1135,7 +1144,7 @@ button { cursor: pointer; }
   <div id="page-blueprint" class="page">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <div>
-        <div class="section-title">Maxx OS v1.4 — Growlink Blueprint</div>
+        <div class="section-title">Maxx OS v1.5 — Growlink Blueprint</div>
         <div style="font-size:12px;color:var(--text3);margin-top:2px">Phase setpoints · Alert thresholds (amber = T2 log, red = T1 Slack after sustain)</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1215,7 +1224,7 @@ button { cursor: pointer; }
 // DATA
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
-const APP_VERSION = '3.7'; // Per-table shot detection backend; remove saturated badge
+const APP_VERSION = '3.8'; // Maxx OS v1.5 + EC Rainbow v1.3.2: revised ripening cascade, daily EC ramp, X3 shortened to 64-66
 const CYCLE = 66; const FLOWER_DAYS = 65; const DARK_DAYS = 0; // No dark period — harvest = flip + 65 = Day 66
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
@@ -1908,6 +1917,22 @@ function strainCodeOnly(name){
 }
 
 // ══════════════════════════════════════════════
+// IPM SUPPORT ROOMS — non-flower rooms that get sprayed but aren't in `rooms`
+// (the flower-room config). Add new entries here to make them appear in the
+// IPM rule editor checkbox list and resolve correctly in tasks/history.
+// ══════════════════════════════════════════════
+const IPM_SUPPORT_ROOMS = [
+  {id:'mother', name:'Mother room'},
+  {id:'veg',    name:'Veg room'},
+  {id:'clones', name:'Clone room'},
+  {id:'dry1',   name:'Dry room 1'},
+  {id:'dry2',   name:'Dry room 2'},
+];
+function getIpmRoom(id){
+  return rooms.find(r=>r.id===id) || IPM_SUPPORT_ROOMS.find(r=>r.id===id) || null;
+}
+
+// ══════════════════════════════════════════════
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
@@ -1964,10 +1989,37 @@ function setRole(role){
 // ══════════════════════════════════════════════
 let _manualByRoom = {};
 let _manualRefreshTimer = null;
+// Phantom-shot flags: roomId → {count, totalRise, latestEventTs} for rooms whose
+// last 2 fire events produced less than 0.4% combined VWC rise. Computed by
+// computePhantomShotFlags() on the backend, fetched via getPhantomShotFlags.
+// Banner clears automatically once a real shot lands and pushes total rise above 0.4%.
+let _phantomShotFlags = {};
+
+async function refreshPhantomShotFlags(silent=true){
+  try {
+    const url = gsUrl + '?action=getPhantomShotFlags';
+    const res = await fetch(url);
+    const d = await res.json();
+    if(!d.ok) return;
+    const before = JSON.stringify(_phantomShotFlags);
+    const after  = JSON.stringify(d.flags || {});
+    _phantomShotFlags = d.flags || {};
+    if(before !== after && document.getElementById('page-rooms') && document.getElementById('page-rooms').classList.contains('active')){
+      renderRooms();
+    }
+  } catch(e) {
+    if(!silent) console.warn('[phantom shot] fetch error', e);
+  }
+}
 
 async function refreshManualEvents(silent=true){
   try {
-    const sinceISO = new Date(Date.now() - 30*60*1000).toISOString();
+    // Window: last 90 min so the badge doesn't blink in/out between manual fires.
+    // A manual session usually fires multiple shots over 30-60 min as the room
+    // gets hand-watered; with only a 30-min lookback the badge would disappear
+    // between fires. 90 min keeps the indicator stable through an active session
+    // while still clearing within ~1.5h of the last manual shot.
+    const sinceISO = new Date(Date.now() - 90*60*1000).toISOString();
     const url = gsUrl + '?action=getSheet&sheet=GL_IrrigationEvents&since=' + encodeURIComponent(sinceISO);
     const res = await fetch(url);
     const d = await res.json();
@@ -2004,7 +2056,11 @@ async function refreshManualEvents(silent=true){
 function startManualRefresh(){
   if(_manualRefreshTimer) return;
   refreshManualEvents();
-  _manualRefreshTimer = setInterval(refreshManualEvents, 60000);
+  refreshPhantomShotFlags();
+  _manualRefreshTimer = setInterval(()=>{
+    refreshManualEvents();
+    refreshPhantomShotFlags();
+  }, 60000);
 }
 
 function stopManualRefresh(){
@@ -2082,14 +2138,15 @@ function renderRooms(){
 
     // Maxx OS phase strip
     let phaseHTML='';
-    if(fd!==null&&fd>=1&&fd<=65){
+    if(fd!==null&&fd>=1&&fd<=66){
       const phase=getPhaseForDay(fd);
       const ecr=getECRainbow(fd);
+      const todayEc=ecForDay(fd);
       if(phase){
         phaseHTML=`<div style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:5px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:10px;flex-wrap:wrap">
           <span style="font-family:var(--mono);font-weight:700;color:var(--text2)">${phase.name}</span>
           <span style="color:var(--text3)">💡 ${phase.light}% · CO₂ ${phase.co2} · ${phase.dayTemp}°/${phase.nightTemp}° · RH ${phase.rh}%</span>
-          ${ecr?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ecr.color}"></span><span style="color:var(--text3)">${ecr.name} EC ${ecr.ecMin}–${ecr.ecMax}</span></span>`:''}
+          ${ecr?`<span style="display:inline-flex;align-items:center;gap:4px" title="${ecr.name} (${ecr.role}) · phase range ${ecr.ecMin}–${ecr.ecMax}"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ecr.color}"></span>${todayEc!=null?`<span style="font-family:var(--mono);font-weight:700;color:var(--text)">EC ${todayEc.toFixed(2)}</span><span style="color:var(--text3);font-size:9px">${ecr.name} ${ecr.ecMin}–${ecr.ecMax}</span>`:`<span style="color:var(--text3)">${ecr.name} EC ${ecr.ecMin}–${ecr.ecMax}</span>`}</span>`:''}
         </div>`;
       }
     } else if(stage==='veg'){
@@ -2149,9 +2206,10 @@ function renderRooms(){
     const badges=[`<span class="stage-badge ${badgeClass}">${badgeText}</span>`];
 
     card.innerHTML=`
+      ${(_phantomShotFlags && _phantomShotFlags[room.id])?`<div style="margin:-12px -12px 10px -12px;padding:8px 12px;background:rgba(239,68,68,0.12);border-bottom:1px solid var(--red);color:var(--red);font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px" title="Last 2 fire events showed less than 0.4% combined VWC rise — check tank, manifold, and valves">⚠ Valves firing — no water reaching substrate</div>`:''}
       <div class="card-head">
         <div>
-          <div class="room-name">${room.name}${(_manualByRoom[room.id]&&_manualByRoom[room.id].length)?` <span title="Manual irrigation in last 30 min" style="display:inline-block;margin-left:6px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.04em;border-radius:3px;background:rgba(245,158,11,0.18);color:var(--amber);vertical-align:middle">✋ MANUAL · table ${_manualByRoom[room.id].join(', ')}</span>`:''}</div>
+          <div class="room-name">${room.name}${(_manualByRoom[room.id]&&_manualByRoom[room.id].length)?` <span title="Manual irrigation in last 90 min" style="display:inline-block;margin-left:6px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.04em;border-radius:3px;background:rgba(245,158,11,0.18);color:var(--amber);vertical-align:middle">✋ MANUAL · table ${_manualByRoom[room.id].join(', ')}</span>`:''}</div>
           <div class="room-meta">${room.tier} · ${room.sqft} sq ft${room.strain?' · '+strainWithCode(room.strain):''}</div>
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${badges.join('')}</div>
@@ -2355,6 +2413,76 @@ function renderAssignments(){
   }
 }
 
+// Scan the past N days of today-logs for ipm_scout completions for a given room.
+// Returns array of {date, time, who, notes, pct} ordered most-recent first.
+function getScoutHistory(roomId, daysBack){
+  const days = daysBack || 14;
+  const out = [];
+  for(let i=0;i<days;i++){
+    const d = new Date(TODAY); d.setDate(d.getDate()-i);
+    const iso = dateToIso(d);
+    const log = L('wg_log_'+iso, []);
+    log.forEach(e => {
+      if(e.taskId === 'ipm_scout' && e.roomId === roomId && e.status === 'done'){
+        out.push({date: iso, time: e.time||'', who: e.who||'', notes: e.notes||'', pct: e.pct||''});
+      }
+    });
+  }
+  // Sort newest first (already mostly in order since outer loop walks back, but make sure)
+  out.sort((a,b)=> a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+  return out;
+}
+
+function countScoutHistory(roomId){
+  return getScoutHistory(roomId, 14).length;
+}
+
+function showScoutHistory(roomId, roomName){
+  const entries = getScoutHistory(roomId, 30);
+  let bg = document.getElementById('scout-history-modal-bg');
+  if(!bg){
+    bg = document.createElement('div');
+    bg.id = 'scout-history-modal-bg';
+    bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal" id="scout-history-modal" style="max-width:560px"></div>`;
+    bg.onclick = (e) => { if(e.target === bg) closeScoutHistory(); };
+    document.body.appendChild(bg);
+  }
+  const modal = document.getElementById('scout-history-modal');
+  const rows = entries.length
+    ? entries.map(e => {
+        const dLabel = (() => {
+          try {
+            const d = new Date(e.date+'T12:00:00');
+            return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+          } catch(_){ return e.date; }
+        })();
+        return `<div style="border-bottom:1px solid var(--border);padding:10px 0">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+            <div style="font-size:13px;font-weight:600;color:var(--text)">${dLabel}${e.time?` · <span style="font-weight:400;color:var(--text3)">${e.time}</span>`:''}</div>
+            <div style="font-size:11px;color:var(--text3)">${e.who||''}</div>
+          </div>
+          ${e.pct?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${e.pct}% canopy</div>`:''}
+          ${e.notes?`<div style="font-size:12px;color:var(--text2);margin-top:4px;white-space:pre-wrap">${e.notes}</div>`:'<div style="font-size:11px;color:var(--text3);margin-top:4px;font-style:italic">No notes recorded</div>'}
+        </div>`;
+      }).join('')
+    : '<div style="text-align:center;padding:24px;color:var(--text3);font-size:13px">No scouting history found in the last 30 days.</div>';
+  modal.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="font-size:14px;font-weight:700;color:var(--text)">Scout history — ${roomName}</div>
+      <button onclick="closeScoutHistory()" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Close</button>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Last 30 days</div>
+    <div>${rows}</div>
+  `;
+  bg.classList.add('open');
+}
+
+function closeScoutHistory(){
+  const bg = document.getElementById('scout-history-modal-bg');
+  if(bg) bg.classList.remove('open');
+}
+
 function buildAssignments(role){
   const groups=[];
   const overrides=roomOverrides;
@@ -2397,8 +2525,12 @@ function buildAssignments(role){
 
     if(role==='ipm'||role==='lead'){
       if(stage==='flower'&&fd!==null&&fd<=42){
-        if(!rov['ipm_scout']){
-          tasks.push({id:'ipm_scout',name:'Scout '+room.name,desc:'Check undersides of leaves, lower canopy, and soil surface. Immediate flag required on any finding.',sub:'Post to #ipm before leaving the room · Full spray rotation schedule uploading soon'});
+        if(!rov['done_ipm_scout']){
+          const histCount = countScoutHistory(room.id);
+          const histSub = histCount > 0
+            ? `<a href="javascript:void(0)" onclick="showScoutHistory('${room.id}','${room.name.replace(/'/g,"\\'")}')" style="color:var(--teal);text-decoration:underline">View scout history (${histCount} ${histCount===1?'entry':'entries'})</a>`
+            : 'No prior scouts logged for this room';
+          tasks.push({id:'ipm_scout',name:'Scout '+room.name,desc:'Check undersides of leaves, lower canopy, and soil surface. Immediate flag required on any finding.',sub:histSub});
         }
       }
     }
@@ -2420,8 +2552,8 @@ function buildAssignments(role){
 
     if(role==='checker'||role==='lead'){
       if(stage==='flower'||stage==='late'){
-        if(!rov['room_check']){
-          tasks.push({id:'room_check',name:'Daily check — '+room.name,desc:'Complete flower room check form: environment readings, runoff EC and pH per table.',sub:'Form: devdavinki.github.io/flower-room-checks'});
+        if(!rov['done_room_check']){
+          tasks.push({id:'room_check',name:'Daily check — '+room.name,desc:'Complete flower room check form: environment readings, runoff EC and pH per table.',sub:'Record per room: RH · Room temp · Leaf temp · Dewpoint · PPFD. Per table: runoff EC and pH'});
         }
       }
     }
@@ -2454,7 +2586,7 @@ function buildAssignments(role){
     const ipmTasks=(typeof getIpmTasksForToday==='function')?getIpmTasksForToday():[];
     const byRoom={};
     ipmTasks.forEach(t=>{
-      const room=rooms.find(r=>r.id===t.roomId);
+      const room=getIpmRoom(t.roomId);
       if(!room) return;
       if(!byRoom[t.roomId]){
         byRoom[t.roomId]={roomId:t.roomId, roomName:room.name, tasks:[]};
@@ -2552,7 +2684,8 @@ function markIpmDone(ruleId, roomId, dueDate, note){
     note:note||'', completedAt:new Date().toISOString()
   });
   S('wg_ipm_log', ipmLog);
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_ipm_log_dirty','1');
+  pushConfigToCloud(true); // immediate, not debounced
   postToSheet('IPM_Log',[dueDate, fmtTime(), loggedInMember?loggedInMember.name:'Unknown', rule.name||'', rule.product||'', roomId, 'done', note||'']);
   renderAssignments();
   if(typeof renderIpmRules==='function') renderIpmRules();
@@ -2573,7 +2706,8 @@ function markIpmSkip(ruleId, roomId, dueDate, reason){
     note:reason||'', completedAt:new Date().toISOString()
   });
   S('wg_ipm_log', ipmLog);
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_ipm_log_dirty','1');
+  pushConfigToCloud(true); // immediate, not debounced
   postToSheet('IPM_Log',[dueDate, fmtTime(), loggedInMember?loggedInMember.name:'Unknown', rule.name||'', rule.product||'', roomId, 'skipped', reason||'']);
   renderAssignments();
   if(typeof renderIpmHistory==='function') renderIpmHistory();
@@ -2590,7 +2724,9 @@ function openIpmRuleEditor(ruleId){
   const modal=document.createElement('div');
   modal.className='modal-bg open';
   modal.id='ipm-rule-modal';
-  const allRooms=rooms.filter(r=>r.id);
+  // Combine support rooms (IPM_SUPPORT_ROOMS) + flower rooms for the checkbox list.
+  const flowerRooms=rooms.filter(r=>r.id);
+  const allRooms=[...IPM_SUPPORT_ROOMS, ...flowerRooms];
   const roomChecks=allRooms.map(r=>{
     const checked=rule.rooms.includes(r.id);
     return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
@@ -2690,7 +2826,8 @@ function saveIpmRule(ruleId){
   if(rule.cadenceType==='dates' && !rule.dates.length){alert('Add at least one date');return;}
   if(!existing) ipmRules.push(rule);
   S('wg_ipm_rules', ipmRules);
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  pushConfigToCloud(true); // immediate, not debounced
   closeIpmRuleEditor();
   renderIpmRules();
   renderAssignments();
@@ -2700,7 +2837,11 @@ function deleteIpmRule(ruleId){
   if(!confirm('Delete this rule? History entries are kept.'))return;
   ipmRules=L('wg_ipm_rules',[]).filter(r=>r.id!==ruleId);
   S('wg_ipm_rules', ipmRules);
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  // Immediate push (not debounced) so the delete propagates before the user
+  // navigates away or refreshes. pushConfigToCloud is fire-and-forget under
+  // no-cors, so we don't await — but we DO call it directly to bypass the 2s timer.
+  pushConfigToCloud(true);
   closeIpmRuleEditor();
   renderIpmRules();
   renderAssignments();
@@ -2712,7 +2853,8 @@ function toggleIpmRule(ruleId){
   if(!r) return;
   r.active=!r.active;
   S('wg_ipm_rules', ipmRules);
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  pushConfigToCloud(true); // immediate, not debounced
   renderIpmRules();
   renderAssignments();
 }
@@ -2730,7 +2872,7 @@ function renderIpmRules(){
     return (a.name||'').localeCompare(b.name||'');
   });
   list.innerHTML=sorted.map(r=>{
-    const roomNames=r.rooms.map(rid=>(rooms.find(rm=>rm.id===rid)||{}).name||rid).join(', ');
+    const roomNames=r.rooms.map(rid=>(getIpmRoom(rid)||{}).name||rid).join(', ');
     let cadDesc='';
     if(r.cadenceType==='every_n'){ cadDesc='Every '+(r.every||1)+' days from '+(r.startDate||'?'); }
     else if(r.cadenceType==='weekdays'){ const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; cadDesc=(r.weekdays||[]).map(i=>days[i]).join(', ')||'no days'; }
@@ -2767,7 +2909,7 @@ function renderIpmHistory(){
     return;
   }
   list.innerHTML=entries.slice(0,200).map(e=>{
-    const room=rooms.find(r=>r.id===e.roomId);
+    const room=getIpmRoom(e.roomId);
     const ds=new Date(e.completedAt||e.date+'T12:00:00');
     const dateStr=isNaN(ds)?(e.date||''):(ds.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+ds.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}));
     const color=e.status==='done'?'var(--green)':'var(--amber)';
@@ -3307,7 +3449,7 @@ function confirmComplete(){
   todayLog.push(entry);
   S('wg_log_'+dateToIso(TODAY),todayLog);
   closeModal();
-  pushConfigDebounced();
+  pushConfigToCloud(true); // immediate — completion must land before user navigates
   renderAssignments();
   renderRooms();
   renderTodayLog();
@@ -3316,6 +3458,7 @@ function skipTask(roomId,taskId){
   if(!roomOverrides[roomId]) roomOverrides[roomId]={};
   roomOverrides[roomId]['skip_'+taskId]=true;
   S('wg_overrides_'+dateToIso(TODAY),roomOverrides);
+  pushConfigToCloud(true); // immediate
   renderAssignments();
   renderRooms();
 }
@@ -3365,7 +3508,7 @@ function renderAdditiveTable(){
       <td>${ad?`<span class="add-pill ${ad.pill}">${ad.name}</span>`:`<span class="add-pill pill-base">Base feed only</span>`}</td>
       <td style="font-family:var(--mono);font-size:12px">${ad?.dose||'—'}</td>
       <td>${ad?.tier2?`<span class="tag tag-amber" style="font-size:9px">#flower-rooms</span>`:d<65?`<span class="tag tag-blue" style="font-size:9px">#daily-dispatch</span>`:''}</td>
-      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d>=63&&d<=65?'Harvest prep':d===CYCLE?'Harvest day — notify #harvest':''}</td>
+      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d>=60&&d<=63?'Pre-harvest defol window':d>=64&&d<=65?'X3 landing zone':d===CYCLE?'CHOP DAY — Day 66 morning':''}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -3502,6 +3645,7 @@ async function submitRoomCheck(){
           taskName:'Daily check — '+matchedRoom.name,who,notes:'',pct:'',time:timeVal,status:'done'});
         S('wg_overrides_'+todayIso, roomOverrides);
         S('wg_log_'+todayIso, todayLog);
+        pushConfigToCloud(true); // sync completion to other devices immediately
         renderAssignments(); renderRooms(); renderTodayLog();
       }
     }
@@ -3601,6 +3745,7 @@ async function loadChecks(){
     if(autoMarked>0){
       S('wg_overrides_'+todayIso,roomOverrides);
       S('wg_log_'+todayIso,todayLog);
+      pushConfigToCloud(true); // sync auto-completions
       renderAssignments();renderRooms();renderTodayLog();
     }
     renderChecks(latest);
@@ -4318,7 +4463,8 @@ function addTeamMember(){
   team.push({id:'u'+Date.now(),name:'',role:'defoliator',agtId:''});
   S('wg_team',team);
   S('wg_team_edited_at',Date.now());
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_team_dirty','1');
+  pushConfigToCloud(true);
   renderTeamRoster();
 }
 
@@ -4326,7 +4472,8 @@ function removeTeamMember(id){
   team=team.filter(m=>m.id!==id);
   S('wg_team',team);
   S('wg_team_edited_at',Date.now());
-  pushConfigDebounced();
+  sessionStorage.setItem('wg_team_dirty','1');
+  pushConfigToCloud(true);
   renderTeamRoster();
 }
 
@@ -4344,8 +4491,9 @@ function setRoomLaunchDate(i, newValue){
   }
   S('wg_rooms_v2', rooms);
   S('wg_rooms_edited_at', Date.now());
+  sessionStorage.setItem('wg_rooms_dirty','1');
   renderRooms();
-  pushConfigDebounced();
+  pushConfigToCloud(true); // immediate, not debounced — date edits must land before page close
 }
 
 function renderTeamRoster(){
@@ -4361,13 +4509,13 @@ function renderTeamRoster(){
         <button onclick="removeTeamMember('${member.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
       </div>
       <label>Name</label>
-      <input value="${member.name||''}" placeholder="Full name" onchange="team[${i}].name=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced();renderTeamRoster()"/>
+      <input value="${member.name||''}" placeholder="Full name" onchange="team[${i}].name=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());sessionStorage.setItem('wg_team_dirty','1');pushConfigToCloud(true);renderTeamRoster()"/>
       <label>Role</label>
-      <select onchange="team[${i}].role=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced();renderTeamRoster()">
+      <select onchange="team[${i}].role=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());sessionStorage.setItem('wg_team_dirty','1');pushConfigToCloud(true);renderTeamRoster()">
         ${Object.entries(ROLE_LABELS).map(([r,l])=>`<option value="${r}"${r===member.role?' selected':''}>${l}</option>`).join('')}
       </select>
       <label>AGT employee ID (leave blank to skip verification)</label>
-      <input type="password" maxlength="10" value="${member.agtId||''}" placeholder="######" onchange="team[${i}].agtId=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());pushConfigDebounced()" style="letter-spacing:.15em"/>
+      <input type="password" maxlength="10" value="${member.agtId||''}" placeholder="######" onchange="team[${i}].agtId=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());sessionStorage.setItem('wg_team_dirty','1');pushConfigToCloud(true)" style="letter-spacing:.15em"/>
     `;
     grid.appendChild(cell);
   });
@@ -4487,6 +4635,17 @@ function finishLogin(member){
   pendingLoginMember=null;
   // Save session with 4-hour expiry
   S('wg_session',{memberId:member.id,expires:Date.now()+(4*60*60*1000)});
+  // Land on a permitted page. Prefer Rooms (most operational roles use it),
+  // fall back to My Tasks, then to whatever is first in the role's perm list.
+  // Without this explicit showPage, the active nav tab ("My Tasks") and the
+  // visible page (whichever has 'active' in the HTML) can disagree, leaving
+  // users on a page their role can't actually navigate to.
+  const perms = ROLE_PERMISSIONS[member.role] || ROLE_PERMISSIONS.lead;
+  const landing = canSee(member.role,'rooms')       ? 'rooms'
+                : canSee(member.role,'assignments') ? 'assignments'
+                : (perms.pages && perms.pages[0])   ? perms.pages[0]
+                                                    : 'assignments';
+  showPage(landing);
 }
 
 function switchUser(){
@@ -4544,15 +4703,15 @@ function renderSettings(){
         ${room.paired?'<span class="tag tag-teal" style="font-size:9px">paired</span>':''}
       </div>
       <label>Strain</label>
-      <input value="${room.strain||''}" placeholder="Strain name" onchange="rooms[${i}].strain=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
+      <input value="${room.strain||''}" placeholder="Strain name" onchange="rooms[${i}].strain=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());sessionStorage.setItem('wg_rooms_dirty','1');renderRooms();pushConfigToCloud(true)"/>
       <label>Launch date (plants in)</label>
       <input type="date" value="${room.launchDate||''}" onchange="setRoomLaunchDate(${i},this.value)"/>
       <label>Flip date (day 1 of flower)</label>
-      <input type="date" value="${room.flipDate||''}" onchange="rooms[${i}].flipDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());renderRooms();pushConfigDebounced()"/>
+      <input type="date" value="${room.flipDate||''}" onchange="rooms[${i}].flipDate=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());sessionStorage.setItem('wg_rooms_dirty','1');renderRooms();pushConfigToCloud(true)"/>
       <label>Rythm Tank #</label>
-      <input type="number" value="${room.tankNumber||''}" placeholder="e.g. 7" onchange="rooms[${i}].tankNumber=parseInt(this.value)||null;S('wg_rooms_v2',rooms);renderRooms()" style="width:80px"/>
+      <input type="number" value="${room.tankNumber||''}" placeholder="e.g. 7" onchange="rooms[${i}].tankNumber=parseInt(this.value)||null;S('wg_rooms_v2',rooms);sessionStorage.setItem('wg_rooms_dirty','1');renderRooms();pushConfigToCloud(true)" style="width:80px"/>
       <label>Note</label>
-      <input value="${room.note||''}" placeholder="e.g. Harvested Fri" onchange="rooms[${i}].note=this.value;S('wg_rooms_v2',rooms)"/>
+      <input value="${room.note||''}" placeholder="e.g. Harvested Fri" onchange="rooms[${i}].note=this.value;S('wg_rooms_v2',rooms);S('wg_rooms_edited_at',Date.now());sessionStorage.setItem('wg_rooms_dirty','1');pushConfigToCloud(true)"/>
       ${d.harvestDate?`<div class="calc-row">
         <span class="calc-tag">Harvest: ${fmtShort(d.harvestDate)}</span>
         <span class="calc-tag">Launch: ${fmtShort(d.nextLaunch)}</span>
@@ -5108,7 +5267,16 @@ function showPage(page){
   document.querySelector(`.nav-tab[data-page="${page}"]`)?.classList.add('active');
   if(page==='settings') renderSettings();
   if(page==='additive') renderAdditiveTable();
-  if(page==='ipm') renderIpmRules();
+  if(page==='ipm'){
+    renderIpmRules();
+    // Pull fresh data so other devices' rules show up; re-render after.
+    pullConfigFromCloud(true).then(()=>{
+      renderIpmRules();
+      if(typeof renderIpmHistory==='function' && document.getElementById('ipm-history-list')){
+        renderIpmHistory();
+      }
+    }).catch(()=>{});
+  }
   if(page==='slack') renderSlackPanels();
   if(page==='assignments') renderAssignments();
   if(page==='today-log') renderTodayLog();
@@ -5204,6 +5372,55 @@ function saveGsUrl(val){
   gsUrl=val.trim(); S('wg_gs_url',gsUrl);
   const st=document.getElementById('gs-url-status');
   if(st){st.textContent='Saved ✓';st.style.color='var(--green)';}
+  // Push to cloud so other devices can pull this URL
+  pushConfigDebounced();
+}
+// Push the current gsUrl (and full config) to the cloud immediately, bypassing
+// the 2-second debounce. Use this when you've just changed the URL and want
+// other devices to be able to pick it up right now.
+async function pushGsUrlToCloud(){
+  const st=document.getElementById('gs-url-status');
+  if(!gsUrl){
+    if(st){st.textContent='No URL set yet — paste and Save first';st.style.color='var(--amber)';}
+    return;
+  }
+  if(st){st.textContent='Pushing to cloud…';st.style.color='var(--text3)';}
+  try{
+    const result=await pushConfigToCloud(false); // false = not silent
+    if(st){st.textContent='✓ Saved to cloud — other devices can now Pull from cloud';st.style.color='var(--green)';}
+  }catch(e){
+    if(st){st.textContent='Push failed: '+e;st.style.color='var(--red)';}
+  }
+}
+
+// Pull the cloud-stored gsUrl and apply it locally. Used when one device's URL
+// got out of sync with the rest.
+async function pullGsUrlFromCloud(){
+  const st=document.getElementById('gs-url-status');
+  if(st){st.textContent='Fetching from cloud…';st.style.color='var(--text3)';}
+  if(!gsUrl){
+    if(st){st.textContent='No URL set yet — paste the latest one first';st.style.color='var(--amber)';}
+    return;
+  }
+  try{
+    const res=await fetch(gsUrl + '?action=getConfig');
+    const json=await res.json();
+    const cloudUrl=json && json.data && json.data.gsUrl;
+    if(!cloudUrl){
+      if(st){st.textContent='No URL stored in cloud yet';st.style.color='var(--amber)';}
+      return;
+    }
+    if(cloudUrl===gsUrl){
+      if(st){st.textContent='Already in sync ✓';st.style.color='var(--green)';}
+      return;
+    }
+    gsUrl=cloudUrl; S('wg_gs_url',gsUrl);
+    const inp=document.getElementById('gs-url-input');
+    if(inp) inp.value=cloudUrl;
+    if(st){st.textContent='Updated to cloud URL ✓ — reload page to apply';st.style.color='var(--green)';}
+  }catch(e){
+    if(st){st.textContent='Pull failed: '+e;st.style.color='var(--red)';}
+  }
 }
 async function testGsUrl(){
   const st=document.getElementById('gs-url-status');
@@ -5627,28 +5844,32 @@ function renderChores(){
 }
 
 // ══════════════════════════════════════════════
-// MAXX OS v1.4 PHASES + EC RAINBOW + GROWLINK BLUEPRINTS
+// MAXX OS v1.5 PHASES + EC RAINBOW v1.3.2 + GROWLINK BLUEPRINTS
 // ══════════════════════════════════════════════
-// Maxx OS v1.4 — full Growlink blueprint setpoints
+// Maxx OS v1.5 — full Growlink blueprint setpoints (May 7, 2026)
+// Changes vs v1.4: F1/F2 softer entry · X1/X2A/X2B revised ripening cascade ·
+// X3 shortened to 64-66 (3 days) · X4 removed · chop Day 66 morning.
+// EC ranges per phase reflect v1.3.2 daily-ramp endpoints (use ecForDay() for
+// today's exact target — phase ranges shown as background context).
 // nightRH = separate night RH target; vpdMin/Max = VPD range; vwcMin/Max = substrate moisture range
 // subECMin/Max = substrate EC range; dryback = target dryback %; shotNote = irrigation guidance
 const MAXX_PHASES=[
   // Vegetative phase — used for unflipped rooms
   {id:'VEG', name:'Vegetative', start:null, end:null, light:50, co2:900, dayTemp:83, nightTemp:79, rh:70, nightRH:75, ecMin:null, ecMax:null, vpdMin:null, vpdMax:null, vwcMin:null, vwcMax:null, subECMin:null, subECMax:null, dryback:null, shotNote:'Veg phase. Maintain canopy, prep for flip.'},
-  {id:'F1', name:'F1 Foundation',   start:1,  end:4,  light:70, co2:900,  dayTemp:78, nightTemp:74, rh:78, nightRH:76, ecMin:1.9, ecMax:2.0, vpdMin:0.8, vpdMax:1.1, vwcMin:65, vwcMax:80, subECMin:2.5, subECMax:3.5, dryback:5,  shotNote:'Small frequent shots. Build root zone.'},
-  {id:'F2', name:'F2 Foundation',   start:5,  end:9,  light:80, co2:1050, dayTemp:80, nightTemp:74, rh:75, nightRH:74, ecMin:2.0, ecMax:2.1, vpdMin:0.9, vpdMax:1.2, vwcMin:65, vwcMax:78, subECMin:2.5, subECMax:3.5, dryback:6,  shotNote:'Maintain moisture. 4-6 shots/day. Watch for stretch.'},
-  {id:'F3', name:'F3 Foundation',   start:10, end:14, light:90, co2:1150, dayTemp:80, nightTemp:74, rh:73, nightRH:73, ecMin:2.1, ecMax:2.3, vpdMin:1.0, vpdMax:1.3, vwcMin:63, vwcMax:75, subECMin:2.8, subECMax:3.8, dryback:7,  shotNote:'Begin structured dryback. First shot 1-2h after lights on.'},
-  {id:'E1', name:'E1 Expansion',    start:15, end:18, light:100,co2:1250, dayTemp:80, nightTemp:73, rh:70, nightRH:70, ecMin:2.1, ecMax:2.3, vpdMin:1.0, vpdMax:1.4, vwcMin:62, vwcMax:75, subECMin:3.0, subECMax:4.0, dryback:8,  shotNote:'Plants expanding fast. Match irrigation to transpiration.'},
-  {id:'E2', name:'E2 Expansion',    start:19, end:22, light:100,co2:1300, dayTemp:80, nightTemp:73, rh:68, nightRH:68, ecMin:2.3, ecMax:2.5, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.0, subECMax:4.2, dryback:9,  shotNote:'High transpiration. Runoff EC 3.0–4.5 target.'},
-  {id:'E3', name:'E3 Expansion',    start:23, end:25, light:100,co2:1350, dayTemp:80, nightTemp:73, rh:66, nightRH:66, ecMin:2.3, ecMax:2.5, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.2, subECMax:4.5, dryback:9,  shotNote:'Approach peak veg mass. Maintain runoff 15–20%.'},
-  {id:'E4', name:'E4 Pre-Stack',    start:26, end:28, light:100,co2:1400, dayTemp:80, nightTemp:73, rh:64, nightRH:64, ecMin:2.3, ecMax:2.5, vpdMin:1.1, vpdMax:1.5, vwcMin:58, vwcMax:72, subECMin:3.2, subECMax:4.5, dryback:10, shotNote:'Tighten dryback. Hard cutoff defol Day 28.'},
-  {id:'S1', name:'S1 Stack',        start:29, end:35, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:58, nightRH:58, ecMin:2.6, ecMax:2.7, vpdMin:1.2, vpdMax:1.6, vwcMin:55, vwcMax:70, subECMin:3.5, subECMax:4.8, dryback:10, shotNote:'Stacking begins. Push EC steadily. Supa Stiky Day 29.'},
-  {id:'S2', name:'S2 True Peak',    start:36, end:42, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:56, nightRH:56, ecMin:2.8, ecMax:2.9, vpdMin:1.2, vpdMax:1.6, vwcMin:53, vwcMax:68, subECMin:3.8, subECMax:5.2, dryback:11, shotNote:'Peak EC. Spray window closes Day 42. Monitor runoff EC closely.'},
-  {id:'S3', name:'S3 Peak Hold',    start:43, end:49, light:100,co2:1350, dayTemp:80, nightTemp:72, rh:55, nightRH:55, ecMin:2.6, ecMax:2.7, vpdMin:1.2, vpdMax:1.6, vwcMin:52, vwcMax:67, subECMin:3.5, subECMax:5.0, dryback:11, shotNote:'Hold peak. Dial back EC slightly. Round 2 defol opens Day 42.'},
-  {id:'X1', name:'X1 Fade',         start:50, end:56, light:90, co2:1200, dayTemp:78, nightTemp:70, rh:52, nightRH:51, ecMin:2.2, ecMax:2.5, vpdMin:1.1, vpdMax:1.5, vwcMin:50, vwcMax:65, subECMin:3.0, subECMax:4.5, dryback:12, shotNote:'EC fade begins. NO H₂O₂. Reduce shot frequency. Supa Stiky X1.'},
-  {id:'X2A',name:'X2A Fade Mid',    start:57, end:60, light:80, co2:1000, dayTemp:77, nightTemp:68, rh:51, nightRH:50, ecMin:1.5, ecMax:2.1, vpdMin:1.0, vpdMax:1.4, vwcMin:48, vwcMax:62, subECMin:2.0, subECMax:3.5, dryback:13, shotNote:'Aggressive fade. Push dryback. Reduce to 3–4 shots/day.'},
-  {id:'X2B',name:'X2B Fade Final',  start:61, end:63, light:70, co2:900,  dayTemp:75, nightTemp:67, rh:50, nightRH:48, ecMin:1.5, ecMax:2.1, vpdMin:0.9, vpdMax:1.3, vwcMin:45, vwcMax:60, subECMin:1.5, subECMax:2.5, dryback:15, shotNote:'Final fade. Pre-harvest defol Day 60–63. Minimal water.'},
-  {id:'X3', name:'X3 Harvest Prep', start:64, end:67, light:45, co2:550,  dayTemp:69, nightTemp:65, rh:45, nightRH:44, ecMin:null,ecMax:null, vpdMin:null,vpdMax:null, vwcMin:35, vwcMax:50, subECMin:null,subECMax:null, dryback:null, shotNote:'Harvest prep. Minimal to no irrigation. Push final dry.'},
+  {id:'F1', name:'F1 Foundation',   start:1,  end:4,  light:50, co2:800,  dayTemp:78, nightTemp:76, rh:78, nightRH:77, ecMin:2.0, ecMax:2.1, vpdMin:0.8, vpdMax:1.1, vwcMin:65, vwcMax:80, subECMin:2.5, subECMax:3.5, dryback:5,  shotNote:'v1.5 softer entry. Small frequent shots. Build root zone.'},
+  {id:'F2', name:'F2 Foundation',   start:5,  end:9,  light:70, co2:1050, dayTemp:80, nightTemp:74, rh:75, nightRH:74, ecMin:2.1, ecMax:2.4, vpdMin:0.9, vpdMax:1.2, vwcMin:65, vwcMax:78, subECMin:2.5, subECMax:3.5, dryback:6,  shotNote:'Mid-step ramp. 4-6 shots/day. Watch for stretch.'},
+  {id:'F3', name:'F3 Foundation',   start:10, end:14, light:90, co2:1150, dayTemp:80, nightTemp:74, rh:73, nightRH:73, ecMin:2.2, ecMax:2.4, vpdMin:1.0, vpdMax:1.3, vwcMin:63, vwcMax:75, subECMin:2.8, subECMax:3.8, dryback:7,  shotNote:'Begin structured dryback. First shot 1-2h after lights on.'},
+  {id:'E1', name:'E1 Expansion',    start:15, end:18, light:100,co2:1250, dayTemp:80, nightTemp:73, rh:70, nightRH:70, ecMin:2.4, ecMax:2.5, vpdMin:1.0, vpdMax:1.4, vwcMin:62, vwcMax:75, subECMin:3.0, subECMax:4.0, dryback:8,  shotNote:'Plants expanding fast. Match irrigation to transpiration.'},
+  {id:'E2', name:'E2 Expansion',    start:19, end:22, light:100,co2:1300, dayTemp:80, nightTemp:73, rh:68, nightRH:68, ecMin:2.5, ecMax:2.6, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.0, subECMax:4.2, dryback:9,  shotNote:'High transpiration. Runoff EC 3.0–4.5 target.'},
+  {id:'E3', name:'E3 Expansion',    start:23, end:25, light:100,co2:1350, dayTemp:80, nightTemp:73, rh:66, nightRH:66, ecMin:2.6, ecMax:2.7, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.2, subECMax:4.5, dryback:9,  shotNote:'Approach peak veg mass. Maintain runoff 15–20%.'},
+  {id:'E4', name:'E4 Pre-Stack',    start:26, end:28, light:100,co2:1400, dayTemp:80, nightTemp:73, rh:64, nightRH:64, ecMin:2.7, ecMax:2.8, vpdMin:1.1, vpdMax:1.5, vwcMin:58, vwcMax:72, subECMin:3.2, subECMax:4.5, dryback:10, shotNote:'Crown formation push. Tighten dryback. Hard cutoff defol Day 28.'},
+  {id:'S1', name:'S1 Stack',        start:29, end:35, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:58, nightRH:58, ecMin:2.8, ecMax:3.0, vpdMin:1.2, vpdMax:1.6, vwcMin:55, vwcMax:70, subECMin:3.5, subECMax:4.8, dryback:10, shotNote:'Peak entry. Push EC steadily. Supa Stiky Day 29.'},
+  {id:'S2', name:'S2 True Peak',    start:36, end:42, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:56, nightRH:56, ecMin:3.0, ecMax:3.1, vpdMin:1.2, vpdMax:1.6, vwcMin:53, vwcMax:68, subECMin:3.8, subECMax:5.2, dryback:11, shotNote:'TRUE PEAK. *3.1 only earned if dryback uniformity, runoff trend, leaf integrity all hold. Spray window closes Day 42.'},
+  {id:'S3', name:'S3 Peak Hold',    start:43, end:49, light:100,co2:1350, dayTemp:80, nightTemp:72, rh:55, nightRH:55, ecMin:2.7, ecMax:3.1, vpdMin:1.2, vpdMax:1.6, vwcMin:52, vwcMax:67, subECMin:3.5, subECMax:5.0, dryback:11, shotNote:'Steeper descent. Hold peak briefly then ramp down. Round 2 defol opens Day 42.'},
+  {id:'X1', name:'X1 Ripening Trigger', start:50, end:56, light:75, co2:900, dayTemp:75, nightTemp:67, rh:48, nightRH:47, ecMin:1.4, ecMax:2.0, vpdMin:1.0, vpdMax:1.4, vwcMin:50, vwcMax:65, subECMin:3.0, subECMax:4.5, dryback:12, shotNote:'v1.5 ripening trigger. EC cliff 2.7→2.0. NO H₂O₂. Pull all additives, base only. Reduce shot frequency.'},
+  {id:'X2A',name:'X2A Cascade',     start:57, end:60, light:60, co2:800,  dayTemp:74, nightTemp:65, rh:44, nightRH:43, ecMin:1.2, ecMax:1.4, vpdMin:1.0, vpdMax:1.4, vwcMin:48, vwcMax:62, subECMin:2.0, subECMax:3.5, dryback:13, shotNote:'Cascade engages. Active fade. Push dryback. 3–4 shots/day.'},
+  {id:'X2B',name:'X2B Maturation',  start:61, end:63, light:50, co2:700,  dayTemp:72, nightTemp:64, rh:42, nightRH:41, ecMin:1.0, ecMax:1.2, vpdMin:0.9, vpdMax:1.3, vwcMin:45, vwcMax:60, subECMin:1.5, subECMax:2.5, dryback:15, shotNote:'Active ripening. Resin-friendly. Pre-harvest defol Day 60–63. Minimal water.'},
+  {id:'X3', name:'X3 Landing Zone', start:64, end:66, light:40, co2:500,  dayTemp:68, nightTemp:63, rh:40, nightRH:39, ecMin:0.8, ecMax:1.0, vpdMin:null,vpdMax:null, vwcMin:35, vwcMax:50, subECMin:null,subECMax:null, dryback:null, shotNote:'Final ripening. Cool finish preserves terpenes. CHOP DAY 66 MORNING.'},
 ];
 function getPhaseForDay(fd){return MAXX_PHASES.find(p=>fd>=p.start&&fd<=p.end)||null;}
 
@@ -5682,19 +5903,43 @@ function saveAlertThresholds(){
 }
 
 
+// EC Rainbow v1.3.2 — phase boundaries (start/end EC values match the daily ramp).
+// Days within a phase are linearly interpolated by EC_DAILY below, but the
+// phase ranges are used for tooltips, color chips, and "what window are we in"
+// context.
 const EC_RAINBOW=[
-  {name:'Red',    start:1,  end:7,  ecMin:1.9,ecMax:2.0,color:'#c0392b'},
-  {name:'Orange', start:8,  end:14, ecMin:2.0,ecMax:2.1,color:'#c05621'},
-  {name:'Yellow', start:15, end:21, ecMin:2.1,ecMax:2.3,color:'#b45309'},
-  {name:'Green',  start:22, end:28, ecMin:2.3,ecMax:2.5,color:'#1e7e34'},
-  {name:'Blue',   start:29, end:35, ecMin:2.6,ecMax:2.7,color:'#1d6fa4'},
-  {name:'Indigo', start:36, end:42, ecMin:2.8,ecMax:2.9,color:'#4338ca'},
-  {name:'Violet', start:43, end:49, ecMin:2.6,ecMax:2.7,color:'#6d28d9'},
-  {name:'Magenta',start:50, end:56, ecMin:2.2,ecMax:2.5,color:'#9d174d'},
-  {name:'Rose',   start:57, end:62, ecMin:1.5,ecMax:2.1,color:'#c05621'},
-  {name:'Flush',  start:63, end:67, ecMin:0.7,ecMax:1.3,color:'#8a9688',flush:true},
+  {name:'Red',     start:1,  end:7,  ecMin:2.0, ecMax:2.2, color:'#c0392b', role:'Foundation'},
+  {name:'Orange',  start:8,  end:14, ecMin:2.2, ecMax:2.4, color:'#c05621', role:'Expansion'},
+  {name:'Yellow',  start:15, end:21, ecMin:2.4, ecMax:2.6, color:'#b45309', role:'Conversion'},
+  {name:'Green',   start:22, end:28, ecMin:2.6, ecMax:2.8, color:'#1e7e34', role:'Crown formation'},
+  {name:'Blue',    start:29, end:35, ecMin:2.8, ecMax:3.0, color:'#1d6fa4', role:'Peak Entry'},
+  {name:'Indigo',  start:36, end:42, ecMin:3.0, ecMax:3.1, color:'#4338ca', role:'True Peak'},
+  {name:'Violet',  start:43, end:49, ecMin:2.7, ecMax:3.1, color:'#6d28d9', role:'Controlled descent'},
+  {name:'Magenta', start:50, end:56, ecMin:1.4, ecMax:2.0, color:'#9d174d', role:'Fade Start (X1)'},
+  {name:'Rose',    start:57, end:60, ecMin:1.2, ecMax:1.4, color:'#be185d', role:'Active Fade (X2A)'},
+  {name:'White',   start:61, end:66, ecMin:0.8, ecMax:1.2, color:'#9ca3af', role:'Finish Taper (X2B/X3)'},
 ];
 function getECRainbow(fd){return EC_RAINBOW.find(r=>fd>=r.start&&fd<=r.end)||null;}
+
+// EC Rainbow v1.3.2 — daily target EC values (page 2 of spec). Every day Day 1-66
+// has an explicit feed-EC target. Day 49→50 is the intentional ripening cliff
+// (2.70 → 2.00, 0.7 EC drop = Maxx OS X1 trigger). Use ecForDay() to look up.
+const EC_DAILY = {
+   1:2.00,  2:2.03,  3:2.07,  4:2.10,  5:2.13,  6:2.17,  7:2.20,
+   8:2.20,  9:2.23, 10:2.27, 11:2.30, 12:2.33, 13:2.37, 14:2.40,
+  15:2.40, 16:2.43, 17:2.47, 18:2.50, 19:2.53, 20:2.57, 21:2.60,
+  22:2.60, 23:2.63, 24:2.67, 25:2.70, 26:2.73, 27:2.77, 28:2.80,
+  29:2.80, 30:2.83, 31:2.87, 32:2.90, 33:2.93, 34:2.97, 35:3.00,
+  36:3.00, 37:3.02, 38:3.03, 39:3.05, 40:3.07, 41:3.08, 42:3.10,
+  43:3.10, 44:3.03, 45:2.97, 46:2.90, 47:2.83, 48:2.77, 49:2.70,
+  50:2.00, 51:1.90, 52:1.80, 53:1.70, 54:1.60, 55:1.50, 56:1.40,
+  57:1.40, 58:1.33, 59:1.27, 60:1.20,
+  61:1.20, 62:1.12, 63:1.04, 64:0.96, 65:0.88, 66:0.80,
+};
+function ecForDay(fd){
+  if(!fd||fd<1||fd>66) return null;
+  return EC_DAILY[fd] != null ? EC_DAILY[fd] : null;
+}
 
 // ══════════════════════════════════════════════
 // METRC DATA — CSV/XLSX IMPORT + VIEWER
@@ -7083,10 +7328,14 @@ function openRoomModal(room) {
   } else if(scoreEl){ scoreEl.innerHTML=''; scoreEl.style.display='none'; }
 
   if (phase) {
+    const _todayEc = fd && fd >= 1 ? ecForDay(fd) : null;
     phaseEl.innerHTML=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:8px;display:flex;justify-content:space-between">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">
         <span>Phase Targets · ${phase.name}</span>
-        ${ecr?`<span style="display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ecr.color}"></span>${ecr.name} EC ${ecr.ecMin}–${ecr.ecMax}</span>`:''}
+        ${ecr?`<span style="display:flex;align-items:center;gap:6px;font-weight:600" title="${ecr.role} · phase EC range ${ecr.ecMin}–${ecr.ecMax}">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ecr.color}"></span>
+          ${_todayEc!=null?`<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text);text-transform:none;letter-spacing:0">Day ${fd} EC ${_todayEc.toFixed(2)}</span><span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text3);font-size:10px">${ecr.name} ${ecr.ecMin}–${ecr.ecMax}</span>`:`${ecr.name} EC ${ecr.ecMin}–${ecr.ecMax}`}
+        </span>`:''}
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px">
         ${[['Temp D/N',phase.dayTemp+'°/'+phase.nightTemp+'°'],['RH',phase.rh+'%'],['CO₂',phase.co2+' ppm'],['Light',phase.light+'%'],
@@ -8476,8 +8725,12 @@ function renderSupplies() {
 
 async function pushConfigToCloud(silent=false){
   if(!gsUrl) return;
-  // Stamp local edit time so cloud pull knows which is newer
-  S('wg_rooms_edited_at', Date.now());
+  // NOTE: We deliberately DO NOT stamp wg_rooms_edited_at here. Stamping it on
+  // every push (regardless of whether rooms were edited) breaks the merge logic
+  // in pullConfigFromCloud: a non-editing device's push would mark rooms as
+  // "freshly edited" and then later pulls would see local as newer than cloud
+  // even though local is actually stale. Edit timestamps should ONLY be set
+  // by actual edit handlers (the room input onchange handlers).
   // Gather today logs for last 7 days
   const todayLogs={};
   for(let i=0;i<7;i++){
@@ -8497,26 +8750,47 @@ async function pushConfigToCloud(silent=false){
     const sessions=L(key,null);
     if(sessions&&sessions.length) cloneSessions[key]=sessions;
   }
+  // Gather roomOverrides (task done/skip per room per day) for last 7 days
+  // so task completions sync across devices — without this, when Hy finishes a
+  // scout on his phone, the lead's desktop would still show "Scout R1" as
+  // pending in My Tasks until the lead refreshed Hy's exact device.
+  const roomOverridesByDay={};
+  for(let i=0;i<7;i++){
+    const d=new Date(TODAY); d.setDate(d.getDate()-i);
+    const iso=dateToIso(d);
+    const ov=L('wg_overrides_'+iso, null);
+    if(ov && Object.keys(ov).length) roomOverridesByDay[iso]=ov;
+  }
+  // Dirty-flag pattern: only push data this device actually edited. Prevents a
+  // non-editing device with stale localStorage from clobbering cloud's correct
+  // values when an unrelated config change triggers a push (e.g. fertigator
+  // logging supplies pushing back stale flipDates).
+  const _roomsDirty    = sessionStorage.getItem('wg_rooms_dirty')==='1';
+  const _teamDirty     = sessionStorage.getItem('wg_team_dirty')==='1';
+  const _ipmRulesDirty = sessionStorage.getItem('wg_ipm_rules_dirty')==='1';
+  const _ipmLogDirty   = sessionStorage.getItem('wg_ipm_log_dirty')==='1';
   const payload={
     action:'setConfig',
     data:{
-      rooms,
-      team,
+      ...(_roomsDirty ? {rooms} : {}),
+      ...(_teamDirty  ? {team}  : {}),
       rolePerms,
+      gsUrl,
+      ...(_ipmRulesDirty ? {ipmRules: L('wg_ipm_rules',[])} : {}),
+      ...(_ipmLogDirty   ? {ipmLog:   L('wg_ipm_log',[])}   : {}),
       customChores:L('wg_custom_chores',null),
       customTasks:L('wg_custom_tasks',[]),
       supplies:L('wg_supplies',[]),
       alertLog:L('wg_alert_log',[]),
       todayLogs,
       cloneSessions,
+      roomOverridesByDay,
       dryRooms,
       alertThresholds,
       trimQueue:L('wg_trim_queue',[]),
       approvedTakedowns:L('wg_approved_takedowns',{}),
       calendarRules:L('wg_cal_rules',[]),
       calendarEvents:L('wg_cal_events',[]),
-      ipmRules:L('wg_ipm_rules',[]),
-      ipmLog:L('wg_ipm_log',[]),
       syncedBy:loggedInMember?loggedInMember.name:'Unknown',
       syncedAt:new Date().toISOString(),
     }
@@ -8525,6 +8799,11 @@ async function pushConfigToCloud(silent=false){
     await fetch(gsUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
       body:JSON.stringify(payload)});
     if(!silent) console.log('[Config] Pushed to cloud');
+    // Clear dirty flags now that the changes are uploaded
+    if(_roomsDirty)    sessionStorage.removeItem('wg_rooms_dirty');
+    if(_teamDirty)     sessionStorage.removeItem('wg_team_dirty');
+    if(_ipmRulesDirty) sessionStorage.removeItem('wg_ipm_rules_dirty');
+    if(_ipmLogDirty)   sessionStorage.removeItem('wg_ipm_log_dirty');
   }catch(e){ if(!silent) console.warn('[Config] Push failed:',e); }
 }
 
@@ -8578,7 +8857,17 @@ async function pullConfigFromCloud(silent=false){
       const localTeamEditAt=L('wg_team_edited_at',0);
       if(localTeamEditAt<=cloudSyncedAtTeam){ team=d.team; S('wg_team',team); }
     }
-    if(d.rolePerms){ rolePerms=d.rolePerms; S('wg_role_perms',rolePerms); applyRolePerms(); }
+    if(d.rolePerms){
+      rolePerms=d.rolePerms;
+      S('wg_role_perms',rolePerms);
+      applyRolePerms();
+      // If the user is logged in, re-run setRole so any newly-granted nav tabs
+      // appear immediately (e.g. lead grants Zec rooms access on their device,
+      // Zec's next config pull should make the Rooms tab visible without reload).
+      if(loggedInMember && typeof setRole==='function'){
+        setRole(currentRole);
+      }
+    }
 
     // Custom chores & tasks
     if(d.customChores){ S('wg_custom_chores',d.customChores); }
@@ -8625,8 +8914,18 @@ async function pullConfigFromCloud(silent=false){
       S('wg_cal_events', calendarEvents);
     }
     if(d.ipmRules&&Array.isArray(d.ipmRules)){
+      // Cloud is authoritative for the rules list. The "skip-empty push" guard in
+      // pushConfigToCloud prevents devices with empty local from accidentally
+      // wiping cloud, so this overwrite is safe.
+      // Critical: trusting cloud is what makes deletions propagate — if we merged
+      // by id, a rule deleted on one device would resurrect from another device's
+      // stale local copy.
       ipmRules = d.ipmRules;
       S('wg_ipm_rules', ipmRules);
+      // Re-render if the IPM page is currently open
+      if(typeof renderIpmRules==='function' && document.getElementById('page-ipm') && document.getElementById('page-ipm').classList.contains('active')){
+        renderIpmRules();
+      }
     }
     if(d.ipmLog&&Array.isArray(d.ipmLog)){
       // Merge by id (append-only union, lead can prune via UI)
@@ -8635,6 +8934,9 @@ async function pullConfigFromCloud(silent=false){
       const merged = [...localLog, ...d.ipmLog.filter(e=>e&&e.id&&!seen.has(e.id))];
       ipmLog = merged;
       S('wg_ipm_log', ipmLog);
+      if(typeof renderIpmHistory==='function' && document.getElementById('ipm-history-list')){
+        renderIpmHistory();
+      }
     }
 
     // Today logs — merge per day
@@ -8647,6 +8949,22 @@ async function pullConfigFromCloud(silent=false){
         merged.sort((a,b)=>a.id-b.id);
         S('wg_log_'+date,merged);
         if(date===dateToIso(TODAY)) todayLog=merged;
+      });
+    }
+
+    // Room task overrides per day — merge so completions made on one device
+    // appear on others. Cloud and local are unioned at the task-key level
+    // (e.g. done_ipm_scout, skip_defol_phase1). Once any device marks done,
+    // it stays done across all devices.
+    if(d.roomOverridesByDay){
+      Object.entries(d.roomOverridesByDay).forEach(([date,cloudOv])=>{
+        const localOv = L('wg_overrides_'+date, {});
+        const merged = {...localOv};
+        Object.entries(cloudOv||{}).forEach(([roomId, cloudKeys])=>{
+          merged[roomId] = {...(merged[roomId]||{}), ...(cloudKeys||{})};
+        });
+        S('wg_overrides_'+date, merged);
+        if(date===dateToIso(TODAY)) roomOverrides = merged;
       });
     }
 
@@ -9033,7 +9351,7 @@ function showBlueprint_status(msg){
 }
 
 
-// Maxx OS v1.4 phase thresholds — uses lead overrides if set, else defaults
+// Maxx OS v1.5 phase thresholds — uses lead overrides if set, else defaults
 // T2 = amber (inner band / log only), T1 = red (outer band / Slack after sustain)
 function getGuardrailsForPhase(phaseId){
   const p = MAXX_PHASES.find(x=>x.id===phaseId);
@@ -9295,7 +9613,16 @@ async function fireT1Slack(alerts){
 
 // ── Daily Review rendering ────────────────────────────────────────
 function renderDailyReview(){
-  const log = getAlertLog();
+  const rawLog = getAlertLog();
+  // Filter out raw "Dew point HIGH" alerts — we use DP Spread (temp − dewpoint)
+  // as the Botrytis-risk signal instead. As long as the spread stays healthy,
+  // raw dewpoint above 60°F is acceptable and shouldn't generate noise.
+  const log = rawLog.filter(l => {
+    const msg = (l.message || '').toLowerCase();
+    if (msg.includes('dew point high')) return false;
+    if (msg.includes('dewpoint high'))  return false;
+    return true;
+  });
   const summaryEl = document.getElementById('daily-review-summary');
   const listEl = document.getElementById('daily-review-list');
   if(!summaryEl||!listEl) return;
@@ -9367,6 +9694,28 @@ function clearOldAlerts(){
   const cutoff = Date.now() - 7*24*60*60*1000;
   const log = getAlertLog().filter(l=>new Date(l.timestamp).getTime()>cutoff);
   saveAlertLog(log);
+  renderDailyReview();
+}
+
+// Removes all "Dew point HIGH" alerts from the log permanently. The alerts
+// are noise — we use DP Spread (temp − dewpoint) as the meaningful Botrytis-risk
+// signal instead, and that alert path stays untouched. Spread alerts have
+// messages like "DP Spread LOW: ..." or "Dewpoint spread narrowing".
+function clearDewpointAlerts(){
+  const before = getAlertLog();
+  const after = before.filter(l => {
+    const msg = (l.message || '').toLowerCase();
+    if (msg.includes('dew point high')) return false;
+    if (msg.includes('dewpoint high'))  return false;
+    return true;
+  });
+  const removed = before.length - after.length;
+  if (removed === 0) {
+    alert('No dewpoint-ceiling alerts to clear.');
+    return;
+  }
+  if (!confirm('Permanently delete ' + removed + ' "Dew point HIGH" alert(s)? DP Spread alerts will be kept.')) return;
+  saveAlertLog(after);
   renderDailyReview();
 }
 
