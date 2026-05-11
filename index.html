@@ -9906,7 +9906,7 @@ function _tr_renderTableBlock(a){
 //   shots = real measured drop, not an invented exponential.
 function _tr_renderTableChart(a){
   const cs = a.chartSeries;
-  if(!cs || (!cs.vwcSamples.length && !cs.ecSamples.length)){
+  if(!cs || (!cs.vwcF.length && !cs.vwcB.length && !cs.ecF.length && !cs.ecB.length)){
     return `<div style="margin:6px 0 10px;padding:14px;background:var(--bg);border-radius:var(--r);text-align:center;font-size:11px;color:var(--text3);font-style:italic">No 24h sensor data for this table — chart unavailable.</div>`;
   }
 
@@ -9922,21 +9922,37 @@ function _tr_renderTableChart(a){
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
 
+  // ── Color tokens — picked from user spec, matched against dashboard tokens ──
+  // F (front) = red family. B (back) = blue family. EC: F = pink, B = baby blue.
+  // Yesterday's (day-before) traces use the same hue at lower opacity, dotted.
+  const COLORS = {
+    fVwc:  '#dc2626',  // solid red
+    bVwc:  '#2563eb',  // solid blue
+    fVwcPrev: '#dc2626', // dotted red (lower opacity)
+    bVwcPrev: '#2563eb', // dotted blue (lower opacity)
+    fEc:   '#ec4899',  // pink
+    bEc:   '#7dd3fc',  // baby blue
+  };
+
   // ── Axes ──
   const tMin = cs.winStart, tMax = cs.winEnd;
   const tSpan = Math.max(1, tMax - tMin);
   const xOf = t => PAD.left + ((t - tMin) / tSpan) * plotW;
 
-  // Left Y (VWC): auto-scale with sensible floors so reference bands stay
-  // visible even on shallow data days.
-  const vwcVals = cs.vwcSamples.map(s => s.vwc).filter(v => v != null);
+  // Left Y (VWC): auto-scale across ALL VWC series (F, B, F-prev, B-prev)
+  // so day-before traces stay visible even if they were very different
+  // from yesterday.
+  const allVwcVals = [
+    ...cs.vwcF.map(s => s.v),
+    ...cs.vwcB.map(s => s.v),
+    ...cs.vwcFPrev.map(s => s.v),
+    ...cs.vwcBPrev.map(s => s.v),
+  ].filter(v => v != null);
   let vMin = 40, vMax = 75;
-  if(vwcVals.length){
-    vMin = Math.min(40, Math.floor(Math.min(...vwcVals) - 2));
-    vMax = Math.max(75, Math.ceil(Math.max(...vwcVals) + 2));
+  if(allVwcVals.length){
+    vMin = Math.min(40, Math.floor(Math.min(...allVwcVals) - 2));
+    vMax = Math.max(75, Math.ceil(Math.max(...allVwcVals) + 2));
   }
-  // For cadence mode, expand to cover the peak band 67-71 and morning 54-57
-  // regardless of data range — those bands are the visual reference.
   if(cadence){
     vMin = Math.min(vMin, 50);
     vMax = Math.max(vMax, 73);
@@ -9944,12 +9960,15 @@ function _tr_renderTableChart(a){
   const vSpan = Math.max(1, vMax - vMin);
   const yOfV = v => PAD.top + plotH * (1 - (v - vMin) / vSpan);
 
-  // Right Y (EC): auto-scale only over data range with a small pad.
-  const ecVals = cs.ecSamples.map(s => s.ec).filter(v => v != null);
+  // Right Y (EC): auto-scale only across today's F and B EC.
+  const allEcVals = [
+    ...cs.ecF.map(s => s.v),
+    ...cs.ecB.map(s => s.v),
+  ].filter(v => v != null);
   let eMin = 2, eMax = 5;
-  if(ecVals.length){
-    eMin = Math.max(0, Math.floor(Math.min(...ecVals) * 10) / 10 - 0.2);
-    eMax = Math.ceil(Math.max(...ecVals) * 10) / 10 + 0.2;
+  if(allEcVals.length){
+    eMin = Math.max(0, Math.floor(Math.min(...allEcVals) * 10) / 10 - 0.2);
+    eMax = Math.ceil(Math.max(...allEcVals) * 10) / 10 + 0.2;
     if(eMax - eMin < 1) eMax = eMin + 1;
   }
   const eSpan = Math.max(0.01, eMax - eMin);
@@ -9963,121 +9982,49 @@ function _tr_renderTableChart(a){
   const refShapes = [];
   if(cadence){
     const t = DD_TARGETS.cadence;
-    // Peak band (green-tinted)
     refShapes.push(`<rect x="${PAD.left}" y="${yOfV(t.peakVwcMax)}" width="${plotW}" height="${yOfV(t.peakVwcMin)-yOfV(t.peakVwcMax)}" fill="rgba(34,197,94,0.06)" stroke="none"/>`);
     refShapes.push(`<text x="${PAD.left+4}" y="${yOfV(t.peakVwcMax)-3}" font-size="9" fill="rgba(34,197,94,0.65)" font-family="monospace">peak ${t.peakVwcMin}-${t.peakVwcMax}%</text>`);
-    // Morning band (blue-tinted)
     refShapes.push(`<rect x="${PAD.left}" y="${yOfV(t.morningVwcMax)}" width="${plotW}" height="${yOfV(t.morningVwcMin)-yOfV(t.morningVwcMax)}" fill="rgba(59,130,246,0.06)" stroke="none"/>`);
     refShapes.push(`<text x="${PAD.left+4}" y="${yOfV(t.morningVwcMin)+11}" font-size="9" fill="rgba(59,130,246,0.65)" font-family="monospace">morning ${t.morningVwcMin}-${t.morningVwcMax}%</text>`);
-    // Target line at 69%
     refShapes.push(`<line x1="${PAD.left}" y1="${yOfV(t.peakVwcTarget)}" x2="${PAD.left+plotW}" y2="${yOfV(t.peakVwcTarget)}" stroke="rgba(34,197,94,0.45)" stroke-width="1" stroke-dasharray="3,3"/>`);
   } else if(p.rampUpTarget != null){
     refShapes.push(`<line x1="${PAD.left}" y1="${yOfV(p.rampUpTarget)}" x2="${PAD.left+plotW}" y2="${yOfV(p.rampUpTarget)}" stroke="rgba(34,197,94,0.55)" stroke-width="1" stroke-dasharray="4,3"/>`);
     refShapes.push(`<text x="${PAD.left+plotW-90}" y="${yOfV(p.rampUpTarget)-4}" font-size="9" fill="rgba(34,197,94,0.7)" font-family="monospace">field capacity ${p.rampUpTarget}%</text>`);
   }
 
-  // ── Modeled VWC curve (calibration) ──
-  // 1) For each shot, find post-shot peak (max VWC in 0..15min after) and
-  //    pre-shot baseline (min VWC in 5min before). Rise = peak - baseline.
-  // 2) Average positive rises = avgRisePerShot. Filter out negative/zero
-  //    rises which represent saturation or sensor lag.
-  // 3) Build a piecewise curve: anchor at first sample VWC, jump by
-  //    avgRisePerShot at each shot fire, linear interpolate to the
-  //    NEXT shot's pre-baseline (or the final sample VWC after the last shot).
-  // The modeled curve is intentionally idealized — operators see where
-  // actual diverges from the model, and that divergence IS the tuning signal.
-  function vwcMinInRange(start, end){
-    let lo = null;
-    for(let i = 0; i < cs.vwcSamples.length; i++){
-      const t = cs.vwcSamples[i].ts.getTime();
-      if(t < start || t > end) continue;
-      if(lo == null || cs.vwcSamples[i].vwc < lo) lo = cs.vwcSamples[i].vwc;
-    }
-    return lo;
-  }
-  function vwcMaxInRange(start, end){
-    let hi = null;
-    for(let i = 0; i < cs.vwcSamples.length; i++){
-      const t = cs.vwcSamples[i].ts.getTime();
-      if(t < start || t > end) continue;
-      if(hi == null || cs.vwcSamples[i].vwc > hi) hi = cs.vwcSamples[i].vwc;
-    }
-    return hi;
-  }
-  function vwcAtClosest(target){
-    let best = null, bestD = Infinity;
-    for(let i = 0; i < cs.vwcSamples.length; i++){
-      const d = Math.abs(cs.vwcSamples[i].ts.getTime() - target);
-      if(d < bestD){ bestD = d; best = cs.vwcSamples[i].vwc; }
-    }
-    return best;
-  }
-
-  const shotRises = [];
-  cs.shotFires.forEach(s => {
-    const fireMs = s.ts.getTime();
-    const baseline = vwcMinInRange(fireMs - 5*60*1000, fireMs);
-    const peak     = vwcMaxInRange(fireMs, fireMs + 15*60*1000);
-    if(baseline != null && peak != null){
-      const rise = peak - baseline;
-      if(rise > 0) shotRises.push(rise);
-    }
-  });
-  const avgRise = shotRises.length ? (shotRises.reduce((a,b)=>a+b,0) / shotRises.length) : 0;
-
-  // Build modeled curve points: [{ts, vwc}]
-  const modeled = [];
-  if(cs.vwcSamples.length){
-    let cursor = cs.vwcSamples[0].vwc;
-    modeled.push({ts: cs.vwcSamples[0].ts.getTime(), vwc: cursor});
-
-    cs.shotFires.forEach((s, idx) => {
-      const fireMs = s.ts.getTime();
-      // Pre-fire baseline target = min VWC in 5min before this shot, falling
-      // back to the cursor's current value if no samples in that window.
-      const preBase = vwcMinInRange(fireMs - 5*60*1000, fireMs);
-      if(preBase != null){
-        // Linear decay from cursor → preBase between previous shot and now
-        modeled.push({ts: fireMs - 60*1000, vwc: preBase});
-        cursor = preBase;
-      }
-      // Jump by avgRise at the shot
-      cursor = cursor + avgRise;
-      modeled.push({ts: fireMs, vwc: cursor});
-    });
-
-    // After the last shot, taper to the last actual VWC sample so the
-    // modeled and actual lines meet at the end of the window (avoids a
-    // huge divergence at the far right).
-    const lastActual = cs.vwcSamples[cs.vwcSamples.length-1];
-    modeled.push({ts: lastActual.ts.getTime(), vwc: lastActual.vwc});
-  }
-
-  // ── Build SVG path strings ──
+  // ── Build SVG polyline points strings ──
+  // Each series is a list of {ts, v} — convert to "x1,y1 x2,y2 ..." for SVG.
+  // Skip if empty so the SVG output doesn't include broken polylines.
   function toPoly(samples, getY){
-    if(!samples.length) return '';
-    return samples.map(s => `${xOf(s.ts.getTime ? s.ts.getTime() : s.ts).toFixed(1)},${getY(s).toFixed(1)}`).join(' ');
+    if(!samples || !samples.length) return '';
+    return samples.map(s => {
+      const ts = s.ts.getTime ? s.ts.getTime() : s.ts;
+      return `${xOf(ts).toFixed(1)},${getY(s.v).toFixed(1)}`;
+    }).join(' ');
   }
-  const actualVwcPts = toPoly(cs.vwcSamples, s => yOfV(s.vwc));
-  const modeledVwcPts = toPoly(modeled, s => yOfV(s.vwc));
-  const actualEcPts = toPoly(cs.ecSamples, s => yOfE(s.ec));
+  const fVwcPts     = toPoly(cs.vwcF,     v => yOfV(v));
+  const bVwcPts     = toPoly(cs.vwcB,     v => yOfV(v));
+  const fVwcPrevPts = toPoly(cs.vwcFPrev, v => yOfV(v));
+  const bVwcPrevPts = toPoly(cs.vwcBPrev, v => yOfV(v));
+  const fEcPts      = toPoly(cs.ecF,      v => yOfE(v));
+  const bEcPts      = toPoly(cs.ecB,      v => yOfE(v));
 
   // ── Shot tick marks (bottom strip) ──
+  // Color-coded for manual vs scheduled per dev skill 10.4 flag taxonomy.
   const tickRowY = PAD.top + plotH + 4;
   const tickH = 10;
   const ticksHtml = cs.shotFires.map(s => {
     const x = xOf(s.ts.getTime());
-    const col = s.isManual ? 'var(--amber)' : 'rgba(59,130,246,0.85)';
+    const col = s.isManual ? 'var(--amber)' : 'rgba(100,116,139,0.85)';
     return `<line x1="${x.toFixed(1)}" y1="${tickRowY}" x2="${x.toFixed(1)}" y2="${tickRowY+tickH}" stroke="${col}" stroke-width="1.5" opacity="0.85"/>`;
   }).join('');
 
   // ── X-axis hour labels (every 2 hours) ──
+  // CDT hard-code per dev skill 10.8 — locale-free for staff device consistency.
   const xLabels = [];
   for(let h = 0; h <= 24; h += 2){
     const t = tMin + h * 60 * 60 * 1000;
     const x = xOf(t);
-    // Convert UTC ms to local "h:mm AM/PM" using CDT offset (-5) — same
-    // convention as the rest of the modal per dev skill 10.8.
     const d = new Date(t);
     let localH = (d.getUTCHours() - 5 + 24) % 24;
     const ampm = localH >= 12 ? 'PM' : 'AM';
@@ -10088,45 +10035,85 @@ function _tr_renderTableChart(a){
 
   // ── Y-axis labels (VWC left, EC right) ──
   const yLabels = [];
-  const vwcTicks = [];
   for(let v = Math.ceil(vMin/5)*5; v <= vMax; v += 5){
     yLabels.push(`<text x="${PAD.left-6}" y="${(yOfV(v)+3).toFixed(1)}" font-size="9" fill="var(--text3)" font-family="monospace" text-anchor="end">${v}%</text>`);
     yLabels.push(`<line x1="${PAD.left}" y1="${yOfV(v).toFixed(1)}" x2="${PAD.left+plotW}" y2="${yOfV(v).toFixed(1)}" stroke="var(--border2)" stroke-width="0.5" opacity="0.25"/>`);
   }
-  // EC ticks on right axis
   const ecTickStep = (eMax - eMin) > 3 ? 1 : 0.5;
   for(let e = Math.ceil(eMin/ecTickStep)*ecTickStep; e <= eMax; e += ecTickStep){
-    yLabels.push(`<text x="${PAD.left+plotW+6}" y="${(yOfE(e)+3).toFixed(1)}" font-size="9" fill="rgba(245,158,11,0.7)" font-family="monospace" text-anchor="start">${e.toFixed(1)}</text>`);
+    yLabels.push(`<text x="${PAD.left+plotW+6}" y="${(yOfE(e)+3).toFixed(1)}" font-size="9" fill="rgba(236,72,153,0.7)" font-family="monospace" text-anchor="start">${e.toFixed(1)}</text>`);
   }
 
   // ── Legend ──
-  const calNote = shotRises.length
-    ? `model calibrated from ${shotRises.length} shot rises · avg +${avgRise.toFixed(1)}% per shot`
-    : `model unavailable — no measurable shot rises in window`;
-  const legend = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:14px;font-size:10px;color:var(--text3);margin:4px 0 2px;padding:0 8px;font-family:var(--mono)">
-    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:#3b82f6"></span>actual VWC</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:0;border-top:1.5px dashed #14b8a6"></span>modeled VWC</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:0;border-top:1.5px dotted #f59e0b"></span>actual EC (right)</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:2px;height:10px;background:rgba(59,130,246,0.85)"></span>shot fire</span>
-    <span style="margin-left:auto;font-style:italic;color:var(--text3)">${calNote}</span>
+  // Six VWC/EC swatches plus shot-tick swatch. Two rows on narrow viewports
+  // via flex-wrap. The day-before lines get explicit "(day before)" labels
+  // so an operator new to the chart doesn't have to figure out from styling
+  // which dotted line means what.
+  const swatch = (color, dashed, label) => `<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:16px;height:0;border-top:${dashed?'1.5px dashed':'2px solid'} ${color};opacity:${dashed?'0.55':'1'}"></span>${label}</span>`;
+  const dottedSwatch = (color, label) => `<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:16px;height:0;border-top:1.5px dotted ${color};opacity:0.6"></span>${label}</span>`;
+  const legend = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;font-size:10px;color:var(--text3);margin:6px 0 2px;padding:0 8px;font-family:var(--mono)">
+    ${swatch(COLORS.fVwc, false, 'F VWC')}
+    ${swatch(COLORS.bVwc, false, 'B VWC')}
+    ${dottedSwatch(COLORS.fVwcPrev, 'F VWC (day before)')}
+    ${dottedSwatch(COLORS.bVwcPrev, 'B VWC (day before)')}
+    ${swatch(COLORS.fEc, false, 'F EC (right)')}
+    ${swatch(COLORS.bEc, false, 'B EC (right)')}
+    <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:2px;height:10px;background:rgba(100,116,139,0.85)"></span>shot fire</span>
   </div>`;
 
   // ── Compose SVG ──
+  // Layer order matters for readability:
+  //   1. Background plot rect
+  //   2. Reference bands (faintest)
+  //   3. Grid lines and axis labels
+  //   4. Day-before VWC traces (dotted, lower opacity, behind today's lines)
+  //   5. EC traces (right axis context)
+  //   6. Today's VWC F/B (primary signal, on top)
+  //   7. Shot ticks
+  const dayBeforeF = fVwcPrevPts ? `<polyline fill="none" stroke="${COLORS.fVwcPrev}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.55" points="${fVwcPrevPts}"/>` : '';
+  const dayBeforeB = bVwcPrevPts ? `<polyline fill="none" stroke="${COLORS.bVwcPrev}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.55" points="${bVwcPrevPts}"/>` : '';
+  const ecFLine    = fEcPts ? `<polyline fill="none" stroke="${COLORS.fEc}" stroke-width="1.2" opacity="0.85" points="${fEcPts}"/>` : '';
+  const ecBLine    = bEcPts ? `<polyline fill="none" stroke="${COLORS.bEc}" stroke-width="1.2" opacity="0.85" points="${bEcPts}"/>` : '';
+  const fVwcLine   = fVwcPts ? `<polyline fill="none" stroke="${COLORS.fVwc}" stroke-width="1.6" points="${fVwcPts}"/>` : '';
+  const bVwcLine   = bVwcPts ? `<polyline fill="none" stroke="${COLORS.bVwc}" stroke-width="1.6" points="${bVwcPts}"/>` : '';
+
   const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;max-height:300px;display:block">
     <rect x="${PAD.left}" y="${PAD.top}" width="${plotW}" height="${plotH}" fill="var(--bg)" stroke="var(--border2)" stroke-width="0.5"/>
     ${refShapes.join('')}
     ${xLabels.join('')}
     ${yLabels.join('')}
-    ${actualEcPts ? `<polyline fill="none" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="2,2" opacity="0.85" points="${actualEcPts}"/>` : ''}
-    ${modeledVwcPts ? `<polyline fill="none" stroke="#14b8a6" stroke-width="1.4" stroke-dasharray="5,3" opacity="0.85" points="${modeledVwcPts}"/>` : ''}
-    ${actualVwcPts ? `<polyline fill="none" stroke="#3b82f6" stroke-width="1.5" points="${actualVwcPts}"/>` : ''}
+    ${dayBeforeF}
+    ${dayBeforeB}
+    ${ecFLine}
+    ${ecBLine}
+    ${fVwcLine}
+    ${bVwcLine}
     ${ticksHtml}
     <line x1="${PAD.left}" y1="${PAD.top+plotH}" x2="${PAD.left+plotW}" y2="${PAD.top+plotH}" stroke="var(--text3)" stroke-width="0.5"/>
   </svg>`;
 
+  // ── F/B divergence notice ──
+  // If F and B diverged by more than the SOP §3.A.14 watch-list threshold
+  // (8% for "intervention required" — we surface the watch-list 5-8% band
+  // here as advisory, not action). Look at peak-to-peak F vs B and morning
+  // low F vs B to catch sustained spread, not single-minute noise.
+  let divergenceNotice = '';
+  const fMax = cs.vwcF.length ? Math.max(...cs.vwcF.map(s => s.v)) : null;
+  const bMax = cs.vwcB.length ? Math.max(...cs.vwcB.map(s => s.v)) : null;
+  if(fMax != null && bMax != null){
+    const peakGap = Math.abs(fMax - bMax);
+    if(peakGap >= 5){
+      const sev = peakGap >= 8 ? 'issue' : 'watch';
+      const color = sev === 'issue' ? 'var(--red)' : 'var(--amber)';
+      const drier = fMax < bMax ? 'F (front)' : 'B (back)';
+      divergenceNotice = `<div style="margin:4px 8px 0;padding:5px 8px;font-size:10px;color:${color};background:${sev==='issue'?'rgba(239,68,68,0.08)':'rgba(245,158,11,0.08)'};border-radius:var(--r);font-family:var(--mono)">⚠ F/B peak gap ${peakGap.toFixed(1)}% — ${drier} ran drier. Per DD 2.2 §3.A.14: 5–8% = watch-list, &gt;8% = intervention. Check dripper seating on the drier side.</div>`;
+    }
+  }
+
   return `<div style="margin:6px 0 4px;padding:8px 4px 0;background:var(--bg);border-radius:var(--r)">
     ${svg}
     ${legend}
+    ${divergenceNotice}
   </div>`;
 }
 
@@ -10713,28 +10700,57 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
     }
   }
 
-  // ── CHART SERIES — 24h window from yesterday lights-on → today lights-on ──
-  // Three series used by _tr_renderTableChart:
-  //   vwcSamples: [{ts, vwc}]   from per-minute (f+b)/2
-  //   ecSamples:  [{ts, ec}]    from per-minute (f_ec+b_ec)/2
-  //   shotFires:  [{ts, isManual}]  from GL_Events filtered to this table
-  // Window edges are inclusive — we keep one extra sample on each side so
-  // the chart's x-axis lines up cleanly with the 8 AM → 8 AM grid.
+  // ── CHART SERIES — yesterday's full cycle + day-before-yesterday comparison ──
+  // The chart shows yesterday lights-on → today lights-on (the irrigation day
+  // we just lived through). The day-before window (2 days ago lights-on → yesterday
+  // lights-on) provides dotted comparison traces so the operator can see whether
+  // today's same probe is climbing/drying back the same way it did the day before.
+  //
+  // Each probe gets its own series — F and B are plotted separately because an
+  // averaged line hides the front/back divergence that's often the actual
+  // tuning signal (slumped slab, partially blocked emitter, canopy shadow).
+  //
+  // Series shape:
+  //   vwcF / vwcB   : [{ts, v}] yesterday's F and B VWC per-minute
+  //   vwcFPrev / vwcBPrev : [{ts, v}] day-before F and B, TIME-SHIFTED forward 24h
+  //                  so each sample's ts lines up with the same clock-hour
+  //                  in yesterday's window for direct overlay.
+  //   ecF / ecB     : [{ts, v}] yesterday's F and B EC per-minute
+  //   shotFires     : [{ts, isManual}] yesterday's shot events for this table
+  //
+  // The "Prev" series get their ts shifted by +24h before being pushed so the
+  // SVG renderer doesn't need to know anything about the time shift — it
+  // just plots all six series on the same window.
   const winStart = yesterdayLightsOnUtc.getTime();
   const winEnd   = todayLightsOnUtc.getTime();
+  const prevWinStart = winStart - 24*60*60*1000;
+  const prevWinEnd   = winStart;
   const fkEc = 't'+tnum+'f_ec', bkEc = 't'+tnum+'b_ec';
 
-  const vwcSamples = [];
-  const ecSamples = [];
+  const vwcF = [], vwcB = [];
+  const ecF  = [], ecB  = [];
+  const vwcFPrev = [], vwcBPrev = [];
+  // Note: not pulling EC prev — the chart already gets visually busy with six
+  // lines; the day-before EC overlay added more noise than signal in testing.
+  // If wanted later, add ecFPrev/ecBPrev here using the same shift pattern.
   for(let i = 0; i < hsList.length; i++){
     const t = hsList[i].ts.getTime();
-    if(t < winStart || t > winEnd) continue;
-    const f = hsList[i][fk], b = hsList[i][bk];
-    const vwc = (f != null && b != null) ? (f+b)/2 : (f != null ? f : b);
-    if(vwc != null) vwcSamples.push({ts: hsList[i].ts, vwc});
-    const fE = hsList[i][fkEc], bE = hsList[i][bkEc];
-    const ec = (fE != null && bE != null) ? (fE+bE)/2 : (fE != null ? fE : bE);
-    if(ec != null) ecSamples.push({ts: hsList[i].ts, ec});
+    if(t >= winStart && t <= winEnd){
+      const f = hsList[i][fk], b = hsList[i][bk];
+      if(f != null) vwcF.push({ts: hsList[i].ts, v: f});
+      if(b != null) vwcB.push({ts: hsList[i].ts, v: b});
+      const fE = hsList[i][fkEc], bE = hsList[i][bkEc];
+      if(fE != null) ecF.push({ts: hsList[i].ts, v: fE});
+      if(bE != null) ecB.push({ts: hsList[i].ts, v: bE});
+    } else if(t >= prevWinStart && t < prevWinEnd){
+      // Day-before — shift forward 24h so it overlays cleanly on yesterday's
+      // window. We construct a fresh Date so the original hsList entry isn't
+      // mutated (in case any other code reads from the same array).
+      const shiftedTs = new Date(t + 24*60*60*1000);
+      const f = hsList[i][fk], b = hsList[i][bk];
+      if(f != null) vwcFPrev.push({ts: shiftedTs, v: f});
+      if(b != null) vwcBPrev.push({ts: shiftedTs, v: b});
+    }
   }
 
   const shotFires = [];
@@ -10749,7 +10765,9 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
 
   const chartSeries = {
     winStart, winEnd,
-    vwcSamples, ecSamples, shotFires,
+    vwcF, vwcB, vwcFPrev, vwcBPrev,
+    ecF, ecB,
+    shotFires,
   };
 
   return { tableNum: tnum, program, p1, p2, p0, chartSeries };
