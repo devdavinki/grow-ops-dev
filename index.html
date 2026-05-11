@@ -9578,17 +9578,35 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
       }
 
       // Overnight dryback adjustment
+      // The presence of a MORNING RESATURATION SHOT is direct evidence the
+      // overnight cycle dried back too much — the operator had to manually
+      // rescue the room. When that's the case, escalate the recommendation
+      // even if the calculated dryback % alone wouldn't have triggered it.
+      const hadMorningResat = t.morningResatShots > 0;
       if(dbTarget != null && t.overnightDbAvg != null){
         const dbDiff = t.overnightDbAvg - dbTarget;
-        if(Math.abs(dbDiff) >= TUNING_DRYBACK_TOL_PCT){
-          const action = dbDiff > 0
-            ? `Lengthen the last shot of the day or add one more late-cycle shot — substrate dried too much overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`
-            : `Shorten the last shot of the day or remove the final cycle — substrate didn't dry enough overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`;
+        const triggerByDryback = Math.abs(dbDiff) >= TUNING_DRYBACK_TOL_PCT;
+        const triggerByResat   = hadMorningResat && dbDiff > -TUNING_DRYBACK_TOL_PCT; // only escalate for too-deep direction
+        if(triggerByDryback || triggerByResat){
+          let action;
+          if(dbDiff > 0 || triggerByResat){
+            action = hadMorningResat
+              ? `Lengthen the last shot of the day or add one more late-cycle shot — substrate dried too much overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target). You had to fire a morning resaturation shot to rescue it — fix the night cycle so this isn't needed.`
+              : `Lengthen the last shot of the day or add one more late-cycle shot — substrate dried too much overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`;
+          } else {
+            action = `Shorten the last shot of the day or remove the final cycle — substrate didn't dry enough overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`;
+          }
           adjustments.push({
-            sev: Math.abs(dbDiff) >= 6 ? 'high' : 'med',
+            sev: hadMorningResat || Math.abs(dbDiff) >= 6 ? 'high' : 'med',
             text: `<b>Table ${t.tableNum} overnight:</b> ${action}`,
           });
         }
+      } else if(hadMorningResat){
+        // No dryback data but we KNOW someone resaturated — that itself is the signal
+        adjustments.push({
+          sev: 'high',
+          text: `<b>Table ${t.tableNum} overnight:</b> You fired ${t.morningResatShots} morning resaturation shot${t.morningResatShots>1?'s':''}. The overnight cycle isn't holding enough water — lengthen the last shot of the day or add one more late-cycle shot.`,
+        });
       }
     }
 
@@ -9600,8 +9618,10 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
         info.push(`Table ${t.tableNum}: front/back gap is ${gap.toFixed(0)}% (${drySide} drier). Watch for 2-3 days before treating as hydraulics.`);
       }
     }
-    if(t.manualShotCount > 0){
-      info.push(`Table ${t.tableNum}: ${t.manualShotCount} manual shot${t.manualShotCount>1?'s':''} fired in the last 24h.`);
+    // Only report MANUAL shots outside the resat window — morning resats are
+    // routine + already drive the overnight-dryback recommendation above.
+    if(t.otherManualShots > 0){
+      info.push(`Table ${t.tableNum}: ${t.otherManualShots} non-routine manual shot${t.otherManualShots>1?'s':''} fired in the last 24h (outside the morning resaturation window).`);
     }
     if(t.morningF == null && t.morningB == null){
       info.push(`Table ${t.tableNum}: no probe data this morning.`);
@@ -9698,14 +9718,39 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
   let failingRun = 0;       // size of the worst run found
   let failingDeclinePct = 0; // total decline across that run
   let manual = 0;
+  let morningResatShots = 0;     // manual shots in the resaturation window (lights-on → first auto shot)
+                                 // these are routine and signal the night cycle dried back too much
   const evList = (ev[roomId] && ev[roomId][tnum]) || [];
   const hsList = hs[roomId] || [];
   const cutoff = Date.now() - 24*60*60*1000;
   const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
 
+  // Classify manual shots:
+  //   - "morning resat" = fired between 7 AM and 10 AM local time (UTC-5 in CDT).
+  //     Lights-on is ~9 AM; first auto shot lands shortly after. This window
+  //     captures the operator pre-emptively re-saturating dry blocks.
+  //   - everything else = "other" (could be a real anomaly — late-day fire,
+  //     mid-cycle intervention, etc.)
+  // We only want to surface the "other" bucket as info on the report. The
+  // morning resat count is used as TUNING SIGNAL — it directly motivates a
+  // more aggressive overnight dryback fix.
+  const RESAT_WINDOW_START_UTC_H = 12; // 7 AM CDT
+  const RESAT_WINDOW_END_UTC_H   = 15; // 10 AM CDT
+  let otherManual = 0;
+  evList.forEach(e => {
+    if(e.ts.getTime() < cutoff) return;
+    if(!e.isManual) return;
+    const h = e.ts.getUTCHours();
+    if(h >= RESAT_WINDOW_START_UTC_H && h < RESAT_WINDOW_END_UTC_H){
+      morningResatShots++;
+    } else {
+      otherManual++;
+    }
+    manual++;
+  });
+
   // Find post-shot VWC for each event (avg of F+B at +15min, fallback to either)
   const recentEvents = evList.filter(e => e.ts.getTime() >= cutoff && !e.isManual);
-  manual = evList.filter(e => e.ts.getTime() >= cutoff && e.isManual).length;
 
   const postShotVwc = []; // array aligned to recentEvents — post-shot VWC value or null
   recentEvents.forEach(e => {
@@ -9757,6 +9802,8 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
     failingRun: failingRun,                    // shot count in the worst declining run, 0 = no concern
     failingDeclinePct: failingDeclinePct,      // total VWC decline across that run
     manualShotCount: manual,
+    morningResatShots: morningResatShots,      // manual shots fired in the 7-10 AM resaturation window
+    otherManualShots: otherManual,             // manual shots outside the resat window (real anomalies)
     hasData: (mF!=null || mB!=null || ovF!=null || ovB!=null),
   };
 }
