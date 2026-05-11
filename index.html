@@ -9769,37 +9769,29 @@ function _tr_renderP1Block(a){
     const bStatus = bDiff == null ? '—' : Math.abs(bDiff) < 2 ? '✓ on target' : (bDiff < 0 ? `${(-bDiff).toFixed(1)}% under` : `${bDiff.toFixed(1)}% over`);
     lines.push({sev:'data', text:`F ended P1 at <b>${r.fEnd!=null?r.fEnd.toFixed(1)+'%':'—'}</b> (${fStatus}) · B ended at <b>${r.bEnd!=null?r.bEnd.toFixed(1)+'%':'—'}</b> (${bStatus}) · target ${target}%`});
 
-    // Recommendation: adjust quantity. Each shot raises by rampUpShotSize %.
+    // F and B are two independent probes sampling the same substrate. There
+    // is no reliable correlation between which probe is "the dripper side" —
+    // sometimes the substrate just holds more water on one side regardless of
+    // where the water was delivered. So we don't pick a "drier side" to tune
+    // to. We tune to the AVERAGE of the two probes — that's the table's
+    // single best estimate of where P1 actually landed.
     //
-    // SUPPRESS the quantity recommendation entirely when F/B gap is wide
-    // (>8%). In that situation the two sides are telling different stories
-    // and the worst-off side is usually hydraulically starved (or flooded)
-    // rather than under/over P1 shot count. Adding or removing P1 shots
-    // tunes to the broken probe and makes the healthy side worse. The
-    // operator needs to fix dripper flow / line pressure first.
+    // F/B spread is noted as context but doesn't change the recommendation.
+    // The grower can see the spread and decide independently whether to add
+    // more drippers on uneven plants over time.
     const fbGap = (fDiff != null && bDiff != null) ? Math.abs(r.fEnd - r.bEnd) : 0;
-    const HYDRAULIC_GAP_PCT = 8;
-    const suppressForHydraulics = fbGap >= HYDRAULIC_GAP_PCT;
+    const NOTABLE_GAP_PCT = 8;
 
-    if(suppressForHydraulics){
-      const drySide = r.fEnd < r.bEnd ? 'front' : 'back';
-      lines.push({sev:'action', text:`⚠ F/B gap is ${fbGap.toFixed(1)}% (${drySide} drier) — <b>fix hydraulics first</b> (dripper flow, line pressure on the ${drySide} side). Adding or removing P1 shots will tune to one probe and worsen the other.`});
-    } else if(p.rampUpShotSize && p.quantity){
-      // Both sides agree directionally (gap is small). Use the worse-off
-      // side to drive the magnitude of the quantity change.
-      const worstDiff = (() => {
-        const fOff = fDiff != null && Math.abs(fDiff) >= 2;
-        const bOff = bDiff != null && Math.abs(bDiff) >= 2;
-        if(fOff && bOff) return Math.abs(fDiff) > Math.abs(bDiff) ? fDiff : bDiff;
-        if(fOff) return fDiff;
-        if(bOff) return bDiff;
-        return 0;
-      })();
-      if(Math.abs(worstDiff) >= 2){
-        let shotsToAdjust = Math.round(worstDiff / p.rampUpShotSize);
+    const avgEnd = (r.fEnd != null && r.bEnd != null) ? (r.fEnd + r.bEnd) / 2
+                  : (r.fEnd != null ? r.fEnd : r.bEnd);
+    const avgDiff = (avgEnd != null) ? avgEnd - target : null;
+
+    if(p.rampUpShotSize && p.quantity && avgDiff != null){
+      if(Math.abs(avgDiff) >= 2){
+        let shotsToAdjust = Math.round(avgDiff / p.rampUpShotSize);
         // CAP magnitude at ±50% of current quantity. Anything bigger than
-        // that is data quality, not tuning — surface as a warning instead
-        // of a destructive recommendation.
+        // that is data quality, not tuning — surface with a disclaimer
+        // instead of a destructive recommendation.
         const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
         const cappedAdjust = Math.max(-maxAdjust, Math.min(maxAdjust, shotsToAdjust));
         const wasCapped = (cappedAdjust !== shotsToAdjust);
@@ -9809,15 +9801,24 @@ function _tr_renderP1Block(a){
           const dir = cappedAdjust > 0 ? 'REDUCE' : 'ADD';
           const change = cappedAdjust > 0 ? `${cappedAdjust} fewer shots` : `${Math.abs(cappedAdjust)} more shots`;
           const closesPct = Math.abs(cappedAdjust) * p.rampUpShotSize;
-          let text = `<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${closesPct.toFixed(1)}% closer to target.`;
+          let text = `<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${closesPct.toFixed(1)}% closer to target (table avg ${avgEnd.toFixed(1)}%).`;
           if(wasCapped){
-            text += ` <span style="color:var(--text3)">(Capped: full correction would need ${Math.abs(shotsToAdjust)} shots, suggests data quality issue or major program drift.)</span>`;
+            text += ` <span style="color:var(--text3)">(Capped: full correction would need ${Math.abs(shotsToAdjust)} shots — suggests data quality or major program drift.)</span>`;
           }
           lines.push({sev:'action', text});
+        } else {
+          lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
         }
       } else {
         lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
       }
+    }
+
+    // Note F/B spread as context only — no action implied. The crew can't
+    // change line pressure mid-cycle; this is informational so they can
+    // notice if a particular table has consistently uneven probes over days.
+    if(fbGap >= NOTABLE_GAP_PCT){
+      lines.push({sev:'info', text:`F/B spread is ${fbGap.toFixed(1)}% — substrate is holding water unevenly across the table. Not a tuning action.`});
     }
   }
   return _tr_phaseBlockShell('P1 RAMP', scheduleSummary, 'Did P1 reach Field Capacity?', lines);
