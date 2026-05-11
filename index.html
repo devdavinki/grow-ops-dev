@@ -9441,7 +9441,20 @@ function _tr_parseSchedule(rows){
     return isNaN(n) ? null : n;
   };
   const hmsToSec = s => {
-    if(!s) return null;
+    if(s == null || s === '') return null;
+    // Sheets sometimes auto-coerces "0:00:45" into a Date or fraction-of-day
+    // number depending on whether the column was force-formatted as text.
+    // Handle three input types:
+    //   1) Date object — extract H:M:S from the date
+    //   2) Number — assume fraction-of-day (Excel/Sheets duration format)
+    //   3) String "HH:MM:SS" or "MM:SS" — normal case
+    if(s instanceof Date){
+      return s.getUTCHours()*3600 + s.getUTCMinutes()*60 + s.getUTCSeconds();
+    }
+    if(typeof s === 'number'){
+      // 1 day = 86400 seconds. Fraction of day → seconds.
+      return Math.round(s * 86400);
+    }
     const parts = String(s).split(':').map(Number);
     if(parts.some(isNaN)) return null;
     if(parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
@@ -9918,6 +9931,13 @@ function _tr_renderP0Block(a){
   // new column is missing (older sheet schema).
   const overnightTarget = (p.overnightDrybackTarget != null ? p.overnightDrybackTarget : p.additionalDryback);
   const summary = `Lights off → next morning · target ${overnightTarget||'?'}% dryback`;
+  // When P2 is OFF, the "last P2 peak" we computed is actually the last P1 peak.
+  // Label accordingly and adjust the recommendation language so we don't
+  // tell the operator to tune a phase that isn't running.
+  const p2IsOff = p.p2Active === false;
+  const peakLabel = p2IsOff ? 'Last P1 shot' : 'Last P2 peak';
+  const phaseTermForRec = p2IsOff ? 'P1' : 'P2';
+  const endTimeForRec = p2IsOff ? (p.rampEnd||'?') : (p.maintenanceEnd||'?');
 
   if(!r || r.lastPeak == null || r.morningLow == null){
     // Distinguish two cases:
@@ -9936,7 +9956,7 @@ function _tr_renderP0Block(a){
   const measured = r.lastPeak - r.morningLow;
   const lines = [];
 
-  lines.push({sev:'data', text:`Last P2 peak <b>${r.lastPeak.toFixed(1)}%</b> at ${r.lastPeakTime} → morning low <b>${r.morningLow.toFixed(1)}%</b> at ${r.morningLowTime}`});
+  lines.push({sev:'data', text:`${peakLabel} <b>${r.lastPeak.toFixed(1)}%</b> at ${r.lastPeakTime} → morning low <b>${r.morningLow.toFixed(1)}%</b> at ${r.morningLowTime}`});
 
   if(target == null){
     lines.push({sev:'info', text:`Measured overnight drop: ${measured.toFixed(1)}%. (No target configured.)`});
@@ -9948,18 +9968,18 @@ function _tr_renderP0Block(a){
   lines.push({sev:'data', text:`Measured: <b>${measured.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
   if(r.morningResatFired){
-    lines.push({sev:'action', text:`⚠ You fired a morning resaturation shot — overnight dried too far. <b>LENGTHEN the last P2 shot duration</b> or <b>push the P2 end time later</b> (currently ${p.maintenanceEnd||'?'}).`});
+    lines.push({sev:'action', text:`⚠ You fired a morning resaturation shot — overnight dried too far. <b>LENGTHEN the last ${phaseTermForRec} shot duration</b> or <b>push the ${phaseTermForRec} end time later</b> (currently ${endTimeForRec}).${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off — substrate has only P1 shots to land on.)</span>' : ''}`});
   } else if(Math.abs(diff) >= 2){
     if(diff > 0){
       // Too deep — push P2 later or lengthen last shot
       const extraSec = p.onePercentShotSize ? Math.round(diff * p.onePercentShotSize) : null;
       const durHint = extraSec ? ` (~+${extraSec}s on the last P2 shot)` : '';
-      lines.push({sev:'action', text:`<b>PUSH last P2 shot later</b> (currently ${p.maintenanceEnd||'?'}) or <b>LENGTHEN the last shot</b>${durHint}. Substrate dried ${diff.toFixed(1)}% too far.`});
+      lines.push({sev:'action', text:`<b>PUSH last ${phaseTermForRec} shot later</b> (currently ${endTimeForRec}) or <b>LENGTHEN the last shot</b>${durHint}. Substrate dried ${diff.toFixed(1)}% too far.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
     } else {
       // Too shallow — pull last P2 earlier or shorten
       const cutSec = p.onePercentShotSize ? Math.round(-diff * p.onePercentShotSize) : null;
       const durHint = cutSec ? ` (~-${cutSec}s on the last P2 shot)` : '';
-      lines.push({sev:'action', text:`<b>PULL last P2 shot earlier</b> (currently ${p.maintenanceEnd||'?'}) or <b>SHORTEN the last shot</b>${durHint}. Substrate held ${(-diff).toFixed(1)}% more water than target.`});
+      lines.push({sev:'action', text:`<b>PULL last ${phaseTermForRec} shot earlier</b> (currently ${endTimeForRec}) or <b>SHORTEN the last shot</b>${durHint}. Substrate held ${(-diff).toFixed(1)}% more water than target.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
     }
   } else {
     lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
