@@ -9514,170 +9514,152 @@ function _tr_parseHistory(rows){
 // ── Per-room card builder ─────────────────────────────────────────
 function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
   const target  = getTuningVwcTarget(phase.id);
-  const dbTarget = phase.dryback;  // blueprint dryback % for this phase
+  const dbTarget = phase.dryback;
   const probesByTable = pm[room.id] || {};
-  const cycles = sch[room.id] || [];
 
-  // Group cycles by ramp_start window so we can label them P1/P2 etc heuristically
-  // Each row in cycles is one Rhythm program; multiple programs across the day = multiple "phases"
-  // Sort by ramp_start, then label sequentially. Each cycle is bound to a table by sensorName like "T1 F".
-  const cycleLabels = _tr_labelCycles(cycles);
+  const tables = [1,2,3].map(tnum => _tr_buildTableData(room.id, tnum, probesByTable, ev, hs, [])).filter(t => t.hasData);
 
-  // Build per-table data block
-  const tables = [1,2,3].map(tnum => _tr_buildTableData(room.id, tnum, probesByTable, ev, hs, cycles)).filter(t => t.hasData);
-
-  // Compute recommendations across tables
-  const recs = [];
-  const flags = [];
+  // Three buckets, in order of priority for the operator:
+  //   1. hydraulics — broken stuff, fix before tuning
+  //   2. adjustments — plain-English shot changes
+  //   3. info — nice to know but not action items
+  const hydraulics = [];
+  const adjustments = [];
+  const info = [];
 
   tables.forEach(t => {
-    const fStr = t.morningF != null ? t.morningF.toFixed(1)+'%' : '—';
-    const bStr = t.morningB != null ? t.morningB.toFixed(1)+'%' : '—';
-
-    // Front/back gap analysis (priority order: flag → worse-side → average fallback)
+    // Hydraulics: phantom shots (valve fires, no water lands)
+    if(t.phantomShotCount > 0){
+      hydraulics.push(`<b>Table ${t.tableNum}:</b> ${t.phantomShotCount} shot${t.phantomShotCount>1?'s':''} fired but didn't reach substrate. Check tank, line, valve, manifold.`);
+    }
+    // Hydraulics: F/B gap > 8% — physical, not a tuning fix
     if(t.morningF != null && t.morningB != null){
       const gap = Math.abs(t.morningF - t.morningB);
-      const drySide   = t.morningF < t.morningB ? 'front' : 'back';
-      const wetSide   = drySide === 'front' ? 'back' : 'front';
-      const dryVal    = Math.min(t.morningF, t.morningB);
-      const wetVal    = Math.max(t.morningF, t.morningB);
-
       if(gap >= TUNING_GAP_ISSUE_PCT){
-        flags.push({ sev:'issue', text:`Table ${t.tableNum} front/back gap ${gap.toFixed(1)}% (${drySide} ${dryVal.toFixed(1)}%, ${wetSide} ${wetVal.toFixed(1)}%) — exceeds 8% threshold. Per DD 2.2 this is a hydraulics issue, not a tuning problem. Check dripper flow & line pressure on the ${drySide} side before adjusting shots.` });
-      } else if(gap >= TUNING_GAP_WATCH_PCT){
-        flags.push({ sev:'watch', text:`Table ${t.tableNum} front/back gap ${gap.toFixed(1)}% (${drySide} ${dryVal.toFixed(1)}%, ${wetSide} ${wetVal.toFixed(1)}%) — watch list. Tuning below targets the ${drySide} side (drier).` });
+        const drySide = t.morningF < t.morningB ? 'front' : 'back';
+        hydraulics.push(`<b>Table ${t.tableNum}:</b> ${drySide} side is ${gap.toFixed(0)}% drier than the other. Check dripper flow & line pressure on the ${drySide} — tuning won't fix this.`);
       }
+    }
 
-      // Decide which value to tune on
-      // - Small gap (≤ TUNING_VWC_DEADBAND_PCT): use average
-      // - Larger gap: target the worse (drier) side
-      const tuneOn = gap <= TUNING_VWC_DEADBAND_PCT ? (t.morningF + t.morningB)/2 : dryVal;
-      const diff = tuneOn - target;
-      if(Math.abs(diff) >= TUNING_VWC_DEADBAND_PCT){
-        const cycForT = cycleLabels.filter(c => c.cycle.table === t.tableNum);
-        // P1 cycle = the first one of the day (earliest ramp_start)
-        const p1 = cycForT[0] || null;
-        if(p1){
-          const rec = _tr_buildDurationFreqRec(p1, diff, gap > TUNING_VWC_DEADBAND_PCT ? drySide : null);
-          recs.push({
-            sev: Math.abs(diff) > 4 ? 'issue' : 'watch',
-            table: t.tableNum,
-            cycle: p1.label,
-            rampStart: p1.cycle.rampStart,
-            currentDur: p1.cycle.duration,
-            currentFreq: p1.cycle.frequency,
-            newDur: rec.newDur,
-            newFreq: rec.newFreq,
-            why: `Morning low ${tuneOn.toFixed(1)}% vs ${target}% target` + (gap > TUNING_VWC_DEADBAND_PCT ? ` (tuning to ${drySide} probe — ${dryVal.toFixed(1)}%)` : '') + `. ${diff < 0 ? 'Substrate dried below target' : 'Substrate above target — too much water held overnight'}.`,
+    // Adjustments — only generated if no hydraulics issue on this table
+    const tableHasHydraulics = (t.phantomShotCount > 0) ||
+      (t.morningF != null && t.morningB != null && Math.abs(t.morningF - t.morningB) >= TUNING_GAP_ISSUE_PCT);
+
+    if(!tableHasHydraulics){
+      // Morning VWC adjustment
+      if(t.morningF != null && t.morningB != null){
+        const gap = Math.abs(t.morningF - t.morningB);
+        const drySide = t.morningF < t.morningB ? 'front' : 'back';
+        const dryVal  = Math.min(t.morningF, t.morningB);
+        const tuneOn = gap <= TUNING_VWC_DEADBAND_PCT ? (t.morningF + t.morningB)/2 : dryVal;
+        const diff = tuneOn - target;
+        const absDiff = Math.abs(diff);
+        if(absDiff >= TUNING_VWC_DEADBAND_PCT){
+          const magnitude = absDiff >= 5 ? 'noticeably' : absDiff >= 3 ? 'somewhat' : 'slightly';
+          const direction = diff < 0 ? 'Increase' : 'Decrease';
+          const sideNote = gap > TUNING_VWC_DEADBAND_PCT ? ` (${drySide} probe at ${dryVal.toFixed(0)}%)` : '';
+          adjustments.push({
+            sev: absDiff >= 5 ? 'high' : 'med',
+            text: `<b>Table ${t.tableNum} morning shots:</b> ${direction} shot size — substrate is ${magnitude} ${diff < 0 ? 'below' : 'above'} target (${tuneOn.toFixed(0)}% vs ${target}%)${sideNote}.`,
+          });
+        }
+      } else if(t.morningF != null || t.morningB != null){
+        // One probe only — work with what we have
+        const v = t.morningF != null ? t.morningF : t.morningB;
+        const side = t.morningF != null ? 'front' : 'back';
+        const diff = v - target;
+        if(Math.abs(diff) >= TUNING_VWC_DEADBAND_PCT){
+          const direction = diff < 0 ? 'Increase' : 'Decrease';
+          adjustments.push({
+            sev: Math.abs(diff) >= 5 ? 'high' : 'med',
+            text: `<b>Table ${t.tableNum} morning shots:</b> ${direction} shot size — ${side} probe at ${v.toFixed(0)}% vs ${target}% target (back probe missing data).`,
           });
         }
       }
-    } else if(t.morningF == null && t.morningB == null){
-      flags.push({ sev:'info', text:`Table ${t.tableNum}: no morning VWC data — sensor outage or program not run yet.` });
-    }
 
-    // Overnight dryback comparison vs blueprint
-    if(dbTarget != null && t.overnightDbAvg != null){
-      const dbDiff = t.overnightDbAvg - dbTarget;
-      if(Math.abs(dbDiff) >= TUNING_DRYBACK_TOL_PCT){
-        const cycForT = cycleLabels.filter(c => c.cycle.table === t.tableNum);
-        const lastCycle = cycForT[cycForT.length-1] || null;
-        if(lastCycle){
-          // If overnight dryback is too HIGH, last shot of the night was too small or too early
-          // (substrate dried too much overnight). Bump duration or push lights-off shot later.
-          // If too LOW, last shot was too large or too late (substrate didn't dry back enough).
-          const dir = dbDiff > 0 ? 'too deep' : 'too shallow';
-          const fix = dbDiff > 0
-            ? 'lengthen last shot by ~5-10s or add 1 late-cycle shot to prevent overnight drift'
-            : 'shorten last shot by ~5-10s or remove the final cycle to allow more overnight drying';
-          recs.push({
-            sev: Math.abs(dbDiff) > 4 ? 'issue' : 'watch',
-            table: t.tableNum,
-            cycle: lastCycle.label + ' (last cycle)',
-            rampStart: lastCycle.cycle.rampStart,
-            currentDur: lastCycle.cycle.duration,
-            currentFreq: lastCycle.cycle.frequency,
-            newDur: dbDiff > 0 ? Math.round((lastCycle.cycle.duration||0) + 7) : Math.max(15, Math.round((lastCycle.cycle.duration||0) - 7)),
-            newFreq: lastCycle.cycle.frequency,
-            why: `Overnight dryback ${t.overnightDbAvg.toFixed(1)}% vs ${dbTarget}% target — ${dir}. ${fix}.`,
+      // Overnight dryback adjustment
+      if(dbTarget != null && t.overnightDbAvg != null){
+        const dbDiff = t.overnightDbAvg - dbTarget;
+        if(Math.abs(dbDiff) >= TUNING_DRYBACK_TOL_PCT){
+          const action = dbDiff > 0
+            ? `Lengthen the last shot of the day or add one more late-cycle shot — substrate dried too much overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`
+            : `Shorten the last shot of the day or remove the final cycle — substrate didn't dry enough overnight (${t.overnightDbAvg.toFixed(0)}% vs ${dbTarget}% target).`;
+          adjustments.push({
+            sev: Math.abs(dbDiff) >= 6 ? 'high' : 'med',
+            text: `<b>Table ${t.tableNum} overnight:</b> ${action}`,
           });
         }
       }
     }
 
-    // Phantom-shot check: cycle fired but VWC didn't move
-    if(t.phantomShotCount > 0){
-      flags.push({ sev:'issue', text:`Table ${t.tableNum}: ${t.phantomShotCount} phantom shot${t.phantomShotCount>1?'s':''} detected — valve fired but VWC rose <0.4%. Check tank, line, valve, or manifold before tuning anything on this table.` });
+    // Info (not action items, just context)
+    if(t.morningF != null && t.morningB != null){
+      const gap = Math.abs(t.morningF - t.morningB);
+      if(gap >= TUNING_GAP_WATCH_PCT && gap < TUNING_GAP_ISSUE_PCT){
+        const drySide = t.morningF < t.morningB ? 'front' : 'back';
+        info.push(`Table ${t.tableNum}: front/back gap is ${gap.toFixed(0)}% (${drySide} drier). Watch for 2-3 days before treating as hydraulics.`);
+      }
     }
-    // Manual shots
     if(t.manualShotCount > 0){
-      flags.push({ sev:'info', text:`Table ${t.tableNum}: ${t.manualShotCount} manual shot${t.manualShotCount>1?'s':''} fired in last 24h. Tuning recommendations exclude manual shots from peak/low math where possible.` });
+      info.push(`Table ${t.tableNum}: ${t.manualShotCount} manual shot${t.manualShotCount>1?'s':''} fired in the last 24h.`);
+    }
+    if(t.morningF == null && t.morningB == null){
+      info.push(`Table ${t.tableNum}: no probe data this morning.`);
     }
   });
 
-  // Render
-  const sevColor = s => s==='issue'?'var(--red)':s==='watch'?'var(--amber)':s==='info'?'var(--blue)':'var(--green)';
-  const sevDot   = s => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sevColor(s)};margin-right:6px;vertical-align:middle"></span>`;
+  // ── Render ─────────────────────────────────────────────────────
+  const phaseColor = phase.id.startsWith('S')?'var(--green)':phase.id.startsWith('X')?'var(--amber)':phase.id.startsWith('E')?'var(--blue)':'var(--text3)';
 
-  const tablesHtml = tables.map(t => {
-    const fStr = t.morningF != null ? t.morningF.toFixed(1)+'%' : '—';
-    const bStr = t.morningB != null ? t.morningB.toFixed(1)+'%' : '—';
-    const gap  = (t.morningF != null && t.morningB != null) ? Math.abs(t.morningF - t.morningB).toFixed(1)+'%' : '—';
-    const ovF  = t.overnightDbF != null ? t.overnightDbF.toFixed(1)+'%' : '—';
-    const ovB  = t.overnightDbB != null ? t.overnightDbB.toFixed(1)+'%' : '—';
+  // Per-table at-a-glance strip (small, just the morning numbers, no F/B Δ column, no Ovn DB clutter)
+  const offColor = o => o==null?'var(--text3)':Math.abs(o)<TUNING_VWC_DEADBAND_PCT?'var(--green)':Math.abs(o)<4?'var(--amber)':'var(--red)';
+  const tableStripHtml = tables.length ? tables.map(t => {
     const fOff = t.morningF != null ? (t.morningF - target) : null;
     const bOff = t.morningB != null ? (t.morningB - target) : null;
-    const offColor = o => o==null?'var(--text3)':Math.abs(o)<TUNING_VWC_DEADBAND_PCT?'var(--green)':Math.abs(o)<4?'var(--amber)':'var(--red)';
-    return `<div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:6px 8px;font-size:11px;font-family:var(--mono);border-top:1px solid var(--border)">
-      <div style="color:var(--text3);font-weight:600">T${t.tableNum}</div>
-      <div><span style="color:var(--text3)">F </span><span style="color:${offColor(fOff)};font-weight:600">${fStr}</span></div>
-      <div><span style="color:var(--text3)">B </span><span style="color:${offColor(bOff)};font-weight:600">${bStr}</span></div>
-      <div><span style="color:var(--text3)">Δ </span>${gap}</div>
-      <div><span style="color:var(--text3)">DB </span>${ovF}/${ovB}</div>
+    const fStr = t.morningF != null ? t.morningF.toFixed(0)+'%' : '—';
+    const bStr = t.morningB != null ? t.morningB.toFixed(0)+'%' : '—';
+    return `<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);font-size:11px;font-family:var(--mono)">
+      <span style="color:var(--text3);font-weight:600">T${t.tableNum}</span>
+      <span><span style="color:var(--text3);font-size:10px">F </span><span style="color:${offColor(fOff)};font-weight:600">${fStr}</span></span>
+      <span><span style="color:var(--text3);font-size:10px">B </span><span style="color:${offColor(bOff)};font-weight:600">${bStr}</span></span>
     </div>`;
-  }).join('');
+  }).join('') : '<div style="font-size:11px;color:var(--text3);font-style:italic">No probe data</div>';
 
-  const recsHtml = recs.length ? recs.map(r => {
-    const durChange = r.newDur != null && r.currentDur != null
-      ? `${r.currentDur}s → <b>${r.newDur}s</b> (Δ ${r.newDur > r.currentDur ? '+' : ''}${(r.newDur - r.currentDur).toFixed(0)}s)`
-      : `duration <b>${r.newDur}s</b>`;
-    const freqChange = r.newFreq != null && r.currentFreq != null && r.newFreq !== r.currentFreq
-      ? `, frequency ${r.currentFreq}m → <b>${r.newFreq}m</b>`
-      : (r.currentFreq != null ? `, frequency ${r.currentFreq}m unchanged` : '');
-    return `<div style="padding:10px 12px;border-left:3px solid ${sevColor(r.sev)};background:var(--bg);border-radius:0 var(--r) var(--r) 0;margin-top:8px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:6px">
-        <div style="font-size:12px;font-weight:600">${sevDot(r.sev)}T${r.table} · ${r.cycle} · starts ${r.rampStart}</div>
-      </div>
-      <div style="font-size:11px;font-family:var(--mono);color:var(--text);margin-bottom:4px">${durChange}${freqChange}</div>
-      <div style="font-size:11px;color:var(--text2);line-height:1.4">${r.why}</div>
-    </div>`;
-  }).join('') : '<div style="padding:10px 12px;color:var(--text3);font-size:12px;font-style:italic">Within target band — no tuning recommended today.</div>';
+  // Hydraulics block — red, comes first when present
+  const hydraulicsHtml = hydraulics.length ? `
+    <div style="margin-top:12px;padding:10px 12px;background:rgba(239,68,68,0.08);border-left:3px solid var(--red);border-radius:0 var(--r) var(--r) 0">
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">⚠ Fix this first — not a tuning problem</div>
+      ${hydraulics.map(h => `<div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:4px">${h}</div>`).join('')}
+    </div>` : '';
 
-  const flagsHtml = flags.length ? '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">'
-    + flags.map(f => `<div style="font-size:11px;color:${sevColor(f.sev)};margin-bottom:4px;line-height:1.4">${sevDot(f.sev)}${f.text}</div>`).join('')
-    + '</div>' : '';
+  // Adjustments block — the meat of the report
+  const adjColor = s => s==='high'?'var(--amber)':'var(--blue)';
+  const adjHtml = adjustments.length ? `
+    <div style="margin-top:12px">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Adjustments</div>
+      ${adjustments.map(a => `<div style="padding:8px 12px;border-left:3px solid ${adjColor(a.sev)};background:var(--bg);border-radius:0 var(--r) var(--r) 0;font-size:12px;line-height:1.5;margin-bottom:6px">${a.text}</div>`).join('')}
+    </div>` : (hydraulics.length ? '' : `
+    <div style="margin-top:12px;padding:10px 12px;background:rgba(34,197,94,0.06);border-left:3px solid var(--green);border-radius:0 var(--r) var(--r) 0;font-size:12px;color:var(--text2)">
+      ✓ All tables within target band. No adjustments needed today.
+    </div>`);
 
-  const phaseColor = phase.id.startsWith('S')?'var(--green)':phase.id.startsWith('X')?'var(--amber)':phase.id.startsWith('E')?'var(--blue)':'var(--text3)';
+  // Info block — only if there's something
+  const infoHtml = info.length ? `
+    <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--text3);line-height:1.5">
+      ${info.map(i => `<div style="margin-bottom:3px">· ${i}</div>`).join('')}
+    </div>` : '';
 
   return `<div class="card" style="padding:14px;border-left:3px solid ${phaseColor}">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div>
-        <div style="font-size:14px;font-weight:700">${room.name}</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">${phase.id} · ${phase.name} · Day ${cycleDay}</div>
-      </div>
-      <div style="text-align:right;font-size:11px;font-family:var(--mono);color:var(--text2)">
-        <div>Target VWC: <b>${target}%</b></div>
-        ${dbTarget!=null?`<div>Target dryback: <b>${dbTarget}%</b></div>`:''}
+        <div style="font-size:15px;font-weight:700">${room.name}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Day ${cycleDay} · ${phase.name} · target <b style="color:var(--text2)">${target}% VWC</b>${dbTarget!=null?' · '+dbTarget+'% dryback':''}</div>
       </div>
     </div>
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:10px">
-      <div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:6px 8px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;background:var(--bg3)">
-        <div>Tbl</div><div>Front AM</div><div>Back AM</div><div>F/B Δ</div><div>Ovn DB F/B</div>
-      </div>
-      ${tablesHtml || '<div style="padding:10px;color:var(--text3);font-size:11px;text-align:center">No per-table data</div>'}
-    </div>
-    ${recsHtml}
-    ${flagsHtml}
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${tableStripHtml}</div>
+    ${hydraulicsHtml}
+    ${adjHtml}
+    ${infoHtml}
   </div>`;
 }
 
