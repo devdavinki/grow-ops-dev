@@ -9900,7 +9900,7 @@ function _tr_renderP2Block(a){
   }
 
   const diff = r.avgDryback - target;
-  const status = Math.abs(diff) < 1 ? '✓ on target' : (diff < 0 ? `${(-diff).toFixed(1)}% too shallow` : `${diff.toFixed(1)}% too deep`);
+  const status = Math.abs(diff) < 1 ? '✓ on target' : (diff < 0 ? `${(-diff).toFixed(1)}% under target` : `${diff.toFixed(1)}% over target`);
   lines.push({sev:'data', text:`Measured ${r.cycles.length} P2 cycles · avg dryback <b>${r.avgDryback.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
   if(Math.abs(diff) >= 1 && p.maintenanceFreq){
@@ -9940,13 +9940,19 @@ function _tr_renderP0Block(a){
   const endTimeForRec = p2IsOff ? (p.rampEnd||'?') : (p.maintenanceEnd||'?');
 
   if(!r || r.lastPeak == null || r.morningLow == null){
-    // Distinguish two cases:
-    //   - P2 fired 0 shots → no "last P2 peak" exists. Operational issue.
-    //   - P2 fired but VWC sensor data missing → genuine no-data.
-    const p2FiredZero = a.p2 && a.p2.expectedCount > 0 && a.p2.firedCount === 0;
-    const text = p2FiredZero
-      ? `Can't measure overnight — P2 didn't fire, so there's no "last P2 peak" to compare against. Fix the P2 alert above first.`
-      : 'No overnight dryback data — sensor outage, manual resaturation, or first day of cycle.';
+    // Distinguish three cases:
+    //   - P2 is intentionally OFF and no P1 fires found either → "no comparable shot"
+    //   - P2 fired 0 shots when it should have → runtime failure
+    //   - Sensor data missing → genuine no-data
+    let text;
+    if(p2IsOff){
+      text = `Can't measure overnight — P2 is off and we couldn't find yesterday's last P1 shot in the event log. Either no P1 fired yesterday or sensor data is missing for that window.`;
+    } else {
+      const p2FiredZero = a.p2 && a.p2.expectedCount > 0 && a.p2.firedCount === 0;
+      text = p2FiredZero
+        ? `Can't measure overnight — P2 didn't fire even though it was scheduled to. Fix the P2 alert above first.`
+        : 'No overnight dryback data — sensor outage, manual resaturation, or first day of cycle.';
+    }
     return _tr_phaseBlockShell('P0 OVERNIGHT', summary, null, [
       {sev:'info', text}
     ]);
@@ -9964,7 +9970,7 @@ function _tr_renderP0Block(a){
   }
 
   const diff = measured - target;
-  const status = Math.abs(diff) < 2 ? '✓ on target' : (diff > 0 ? `${diff.toFixed(1)}% too deep` : `${(-diff).toFixed(1)}% too shallow`);
+  const status = Math.abs(diff) < 2 ? '✓ on target' : (diff > 0 ? `${diff.toFixed(1)}% over target` : `${(-diff).toFixed(1)}% under target`);
   lines.push({sev:'data', text:`Measured: <b>${measured.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
   if(r.morningResatFired){
@@ -9973,12 +9979,12 @@ function _tr_renderP0Block(a){
     if(diff > 0){
       // Too deep — push P2 later or lengthen last shot
       const extraSec = p.onePercentShotSize ? Math.round(diff * p.onePercentShotSize) : null;
-      const durHint = extraSec ? ` (~+${extraSec}s on the last P2 shot)` : '';
+      const durHint = extraSec ? ` (~+${extraSec}s on the last ${phaseTermForRec} shot)` : '';
       lines.push({sev:'action', text:`<b>PUSH last ${phaseTermForRec} shot later</b> (currently ${endTimeForRec}) or <b>LENGTHEN the last shot</b>${durHint}. Substrate dried ${diff.toFixed(1)}% too far.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
     } else {
       // Too shallow — pull last P2 earlier or shorten
       const cutSec = p.onePercentShotSize ? Math.round(-diff * p.onePercentShotSize) : null;
-      const durHint = cutSec ? ` (~-${cutSec}s on the last P2 shot)` : '';
+      const durHint = cutSec ? ` (~-${cutSec}s on the last ${phaseTermForRec} shot)` : '';
       lines.push({sev:'action', text:`<b>PULL last ${phaseTermForRec} shot earlier</b> (currently ${endTimeForRec}) or <b>SHORTEN the last shot</b>${durHint}. Substrate held ${(-diff).toFixed(1)}% more water than target.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
     }
   } else {
