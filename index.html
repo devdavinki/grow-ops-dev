@@ -9707,14 +9707,45 @@ function _tr_renderP2Block(a){
   const r = a.p2;
   const scheduleSummary = `${p.maintenanceQuantity||'?'} shots × ${p.maintenanceDurationSec||'?'}s @ ${p.maintenanceFreq||'?'} min intervals · ${p.maintenanceStart||'?'}–${p.maintenanceEnd||'?'}`;
 
-  if(!r || r.cycles.length === 0){
+  // No schedule data at all
+  if(!r){
     return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, null, [
-      {sev:'info', text:'No P2 dryback cycles detected yesterday.'}
+      {sev:'info', text:'No P2 schedule data — start/end times missing from sheet.'}
     ]);
   }
 
+  // Schedule says shots expected but none fired → operational alert.
+  // This is more urgent than a tuning rec — Growlink program may have stalled,
+  // tank may be dry, valve relay may be dead.
+  if(r.expectedCount > 0 && r.firedCount === 0){
+    return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, null, [
+      {sev:'action', text:`⚠ <b>P2 expected ${r.expectedCount} shots, fired 0.</b> Growlink may not be running this program. Check: program active in Growlink, tank not empty, valve relay healthy, no rule overriding the schedule.`},
+    ]);
+  }
+
+  // Fired some shots, but not enough cycles to measure (need at least 2 events
+  // for 1 cycle). Surface what we know.
+  if(r.cycles.length === 0){
+    const lines = [];
+    if(r.expectedCount != null && r.firedCount < r.expectedCount){
+      lines.push({sev:'action', text:`⚠ P2 expected ${r.expectedCount} shots, only ${r.firedCount} fired. ${r.expectedCount - r.firedCount} shots missing — check Growlink program and tank/valve.`});
+    } else if(r.firedCount === 1){
+      lines.push({sev:'info', text:`Only 1 P2 shot fired — not enough to measure a dryback cycle.`});
+    } else {
+      lines.push({sev:'info', text:`No P2 dryback cycles measurable from yesterday's data.`});
+    }
+    return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, null, lines);
+  }
+
+  // We have cycles. Continue with the normal dryback analysis.
   const target = p.maintenanceDryback;
   const lines = [];
+
+  // Note any shot count discrepancy
+  if(r.expectedCount != null && r.firedCount < r.expectedCount){
+    const missing = r.expectedCount - r.firedCount;
+    lines.push({sev:'info', text:`Expected ${r.expectedCount} P2 shots, ${r.firedCount} fired (${missing} missing).`});
+  }
 
   if(target == null){
     lines.push({sev:'info', text:`Measured ${r.cycles.length} P2 cycles, avg dryback ${r.avgDryback.toFixed(1)}%. (No target configured.)`});
@@ -9726,14 +9757,8 @@ function _tr_renderP2Block(a){
   lines.push({sev:'data', text:`Measured ${r.cycles.length} P2 cycles · avg dryback <b>${r.avgDryback.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
   if(Math.abs(diff) >= 1 && p.maintenanceFreq){
-    // Too shallow = shots firing too often → INCREASE interval
-    // Too deep   = shots firing too rarely → DECREASE interval
-    // Magnitude: proportional. If we're getting 1% drybacks and want 3%, shots
-    // are firing 3× more often than needed. Interval should roughly triple.
-    // But capped at sane bounds.
     const factor = target / r.avgDryback;
-    let newFreq = Math.round(p.maintenanceFreq * factor / 5) * 5; // round to nearest 5 min
-    // Cap movement at ±50% per recommendation to avoid wild swings
+    let newFreq = Math.round(p.maintenanceFreq * factor / 5) * 5;
     const minNew = Math.max(15, Math.round(p.maintenanceFreq * 0.5));
     const maxNew = Math.round(p.maintenanceFreq * 2);
     newFreq = Math.max(minNew, Math.min(maxNew, newFreq));
@@ -9754,8 +9779,15 @@ function _tr_renderP0Block(a){
   const summary = `Lights off → next morning · target ${p.additionalDryback||'?'}% dryback`;
 
   if(!r || r.lastPeak == null || r.morningLow == null){
+    // Distinguish two cases:
+    //   - P2 fired 0 shots → no "last P2 peak" exists. Operational issue.
+    //   - P2 fired but VWC sensor data missing → genuine no-data.
+    const p2FiredZero = a.p2 && a.p2.expectedCount > 0 && a.p2.firedCount === 0;
+    const text = p2FiredZero
+      ? `Can't measure overnight — P2 didn't fire, so there's no "last P2 peak" to compare against. Fix the P2 alert above first.`
+      : 'No overnight dryback data — sensor outage, manual resaturation, or first day of cycle.';
     return _tr_phaseBlockShell('P0 OVERNIGHT', summary, null, [
-      {sev:'info', text:'No overnight dryback data — sensor outage, manual resaturation, or first day of cycle.'}
+      {sev:'info', text}
     ]);
   }
 
@@ -9895,10 +9927,16 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
   }
 
   // ── P2 dryback cycles ──
-  // Take the F+B average VWC series within [p2StartMs, p2EndMs]. Walk through
-  // events for this table firing in that window. For each consecutive pair of
-  // events, take the post-shot peak (15min after first) and the trough just
-  // before the next event. dryback = peak - trough.
+  // Track both EXPECTED shots (from schedule) and ACTUAL fires (from events).
+  // The mismatch is itself a useful signal — "scheduled 5, fired 0" means
+  // Growlink isn't actually running the P2 program, which is more urgent
+  // than a tuning recommendation.
+  //
+  // For each consecutive pair of fired events:
+  //   - peak = max VWC in [event.ts, event.ts + 20min]
+  //   - trough = min VWC in (event.ts + 20min, next_event.ts]
+  //   - dryback = peak - trough
+  // Avg across cycles gives the table's actual P2 dryback delivery.
   let p2 = null;
   if(p2StartMs && p2EndMs && ev[roomId] && ev[roomId][tnum]){
     const events = ev[roomId][tnum]
@@ -9908,10 +9946,7 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
     for(let i = 0; i < events.length - 1; i++){
       const t1 = events[i].ts.getTime();
       const t2 = events[i+1].ts.getTime();
-      // Peak: max VWC in [t1, t1+20min]
-      let peak = null;
-      // Trough: min VWC in [t1+20min, t2]
-      let trough = null;
+      let peak = null, trough = null;
       for(let j = 0; j < hsList.length; j++){
         const t = hsList[j].ts.getTime();
         if(t < t1) continue;
@@ -9928,12 +9963,13 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
         cycles.push({ peak, trough, drop: peak - trough });
       }
     }
-    if(cycles.length){
-      const avgDryback = cycles.reduce((s,c) => s + c.drop, 0) / cycles.length;
-      p2 = { cycles, avgDryback };
-    } else {
-      p2 = { cycles: [], avgDryback: 0 };
-    }
+    const avgDryback = cycles.length ? cycles.reduce((s,c) => s + c.drop, 0) / cycles.length : null;
+    p2 = {
+      cycles,
+      avgDryback,
+      firedCount: events.length,            // how many auto P2 events actually fired
+      expectedCount: program.maintenanceQuantity || null,  // what the schedule said
+    };
   }
 
   // ── P0 overnight ──
