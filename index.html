@@ -9429,33 +9429,74 @@ function _tr_parseProbeMetrics(rows){
 }
 
 function _tr_parseSchedule(rows){
-  // Returns sch[roomId] = [{table, sensorName, sensorId, rampStart, rampEnd, frequency, duration, quantity, programId, isActive}]
+  // Returns sch[roomId][tableNum] = {schedule + Growlink target values}
+  // Keyed by table for fast lookup. Reads new target columns added in
+  // the extended GL_IrrigationSchedule schema.
   if(!rows || rows.length<2) return {};
   const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
   const col = n => hdr.indexOf(n);
+  const num = v => {
+    if(v===''||v==null) return null;
+    const n = parseFloat(v);
+    return isNaN(n) ? null : n;
+  };
+  const hmsToSec = s => {
+    if(!s) return null;
+    const parts = String(s).split(':').map(Number);
+    if(parts.some(isNaN)) return null;
+    if(parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
+    if(parts.length === 2) return parts[0]*60 + parts[1];
+    return null;
+  };
+  // HH:MM:SS local time → minutes-from-midnight (local, no TZ math)
+  const hmsToMinutes = s => {
+    if(!s) return null;
+    const parts = String(s).split(':').map(Number);
+    if(parts.some(isNaN)) return null;
+    if(parts.length >= 2) return parts[0]*60 + parts[1];
+    return null;
+  };
   const out = {};
   rows.slice(1).forEach(row=>{
     const rid = String(row[col('room_id')]||'');
     if(!rid) return;
     const isActive = row[col('is_active')] === true || String(row[col('is_active')]).toLowerCase()==='true';
     if(!isActive) return;
-    (out[rid] = out[rid] || []).push({
-      table:       parseInt(row[col('table_number')]) || null,
-      sensorName:  String(row[col('sensor_name')]||''),
-      sensorId:    String(row[col('sensor_id')]||''),
-      rampStart:   String(row[col('ramp_start')]||''),
-      rampEnd:     String(row[col('ramp_end')]||''),
-      frequency:   parseFloat(row[col('frequency')]) || null,  // minutes between shots
-      duration:    parseFloat(row[col('duration')])  || null,  // seconds per shot
-      quantity:    parseFloat(row[col('quantity')])  || null,
-      programId:   String(row[col('program_id')]||''),
-    });
+    const tnum = parseInt(row[col('table_number')]) || null;
+    if(!tnum) return;
+    if(!out[rid]) out[rid] = {};
+    out[rid][tnum] = {
+      table: tnum,
+      sensorName: String(row[col('sensor_name')]||''),
+      programId: String(row[col('program_id')]||''),
+      // P1 schedule
+      rampStart: String(row[col('ramp_start')]||''),
+      rampEnd: String(row[col('ramp_end')]||''),
+      rampStartMin: hmsToMinutes(row[col('ramp_start')]),
+      rampEndMin:   hmsToMinutes(row[col('ramp_end')]),
+      durationSec: hmsToSec(row[col('duration')]),
+      quantity: num(row[col('quantity')]),
+      // Growlink targets
+      rampUpTarget: num(row[col('ramp_up_target')]),
+      rampUpShotSize: num(row[col('ramp_up_shot_size')]),
+      rampUpShotDryback: num(row[col('ramp_up_shot_dryback')]),
+      rampUpShotInterval: num(row[col('ramp_up_shot_interval')]),
+      maintenanceDryback: num(row[col('maintenance_dryback')]),
+      maintenanceFreq: num(row[col('maintenance_freq')]),
+      maintenanceStart: String(row[col('maintenance_start')]||''),
+      maintenanceEnd: String(row[col('maintenance_end')]||''),
+      maintenanceStartMin: hmsToMinutes(row[col('maintenance_start')]),
+      maintenanceEndMin:   hmsToMinutes(row[col('maintenance_end')]),
+      maintenanceDurationSec: hmsToSec(row[col('maintenance_duration')]),
+      maintenanceQuantity: num(row[col('maintenance_quantity')]),
+      additionalDryback: num(row[col('additional_dryback')]),
+      onePercentShotSize: num(row[col('one_percent_shot_size')]),
+      lightsOnTime: String(row[col('lights_on_time')]||''),
+      steeringType: num(row[col('steering_type')]),
+    };
   });
-  // Sort by ramp start within each room for predictable cycle ordering
-  Object.values(out).forEach(arr => arr.sort((a,b) => String(a.rampStart).localeCompare(String(b.rampStart))));
   return out;
 }
-
 function _tr_parseEvents(rows){
   // Returns ev[roomId][tableNum] = [{ts, durSec, flag, isManual}], sorted asc
   if(!rows || rows.length<2) return {};
@@ -9513,453 +9554,426 @@ function _tr_parseHistory(rows){
 
 // ── Per-room card builder ─────────────────────────────────────────
 function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
-  const target  = getTuningVwcTarget(phase.id);
-  const dbTarget = phase.dryback;
-  const probesByTable = pm[room.id] || {};
+  // Pull per-table programs from the schedule. sch[roomId] is now keyed by tnum.
+  const programs = sch[room.id] || {};
+  const tableNums = Object.keys(programs).map(n=>parseInt(n)).sort();
 
-  // For each table, build the per-shot timeline + summary stats.
-  const tables = [1,2,3].map(tnum => {
-    const summary = _tr_buildTableSummary(room.id, tnum, probesByTable, ev, hs, target);
-    const timeline = _tr_buildPerShotTimeline(room.id, tnum, ev, hs, sch[room.id]||[], target);
-    return { tnum, summary, timeline };
-  }).filter(x => x.summary.hasData || x.timeline.shots.length > 0);
-
-  // Room-level hydraulics flags (still useful as a header)
-  const hydraulics = [];
-  tables.forEach(({tnum, summary}) => {
-    if(summary.failingRun >= 3){
-      hydraulics.push(`<b>Table ${tnum}:</b> ${summary.failingRun} consecutive shots dropped substrate by ${summary.failingDeclinePct.toFixed(1)}% below target. Water isn't landing. Check tank, line, valve, manifold.`);
-    }
-  });
+  // Build analysis per table
+  const analyses = tableNums.map(tnum => _tr_analyzeTable(room.id, tnum, programs[tnum], ev, hs)).filter(a => a);
 
   const phaseColor = phase.id.startsWith('S')?'var(--green)':phase.id.startsWith('X')?'var(--amber)':phase.id.startsWith('E')?'var(--blue)':'var(--text3)';
 
-  const hydraulicsHtml = hydraulics.length ? `
-    <div style="margin:10px 0;padding:10px 12px;background:rgba(239,68,68,0.08);border-left:3px solid var(--red);border-radius:0 var(--r) var(--r) 0">
-      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">⚠ Fix hydraulics first — tuning won't help</div>
-      ${hydraulics.map(h => `<div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:4px">${h}</div>`).join('')}
-    </div>` : '';
+  // Cross-table config drift info (rare but useful)
+  const driftInfo = _tr_detectConfigDrift(programs);
 
-  // Per-table timeline blocks
-  const tableBlocksHtml = tables.map(({tnum, summary, timeline}) => _tr_renderTableTimeline(tnum, summary, timeline, target)).join('');
+  // Room header
+  const headerHtml = `<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+    <div>
+      <div style="font-size:15px;font-weight:700">${room.name}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">Day ${cycleDay} · ${phase.name}</div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">Yesterday's outcome</div>
+  </div>`;
+
+  const driftHtml = driftInfo ? `<div style="font-size:11px;color:var(--text3);margin:4px 0 8px;padding:6px 10px;background:var(--bg);border-radius:var(--r);font-style:italic">ℹ ${driftInfo}</div>` : '';
+
+  const blocksHtml = analyses.map(a => _tr_renderTableBlock(a)).join('');
 
   return `<div class="card" style="padding:14px;border-left:3px solid ${phaseColor}">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:6px">
-      <div>
-        <div style="font-size:15px;font-weight:700">${room.name}</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Day ${cycleDay} · ${phase.name} · target <b style="color:var(--text2)">${target}% VWC</b>${dbTarget!=null?' · '+dbTarget+'% dryback':''}</div>
-      </div>
-      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">Yesterday's shots</div>
-    </div>
-    ${hydraulicsHtml}
-    ${tableBlocksHtml || '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No shot data for yesterday.</div>'}
+    ${headerHtml}
+    ${driftHtml}
+    ${blocksHtml || '<div style="padding:12px;color:var(--text3);font-size:12px;text-align:center">No schedule data for this room yet.</div>'}
   </div>`;
 }
 
-// Render one table's per-shot timeline with adjustment column.
-// summary: { hasData, baselineGap, vwcPerSec, ... }
-// timeline: { shots: [{ts, fPeak, bPeak, fExpected, bExpected, fDelta, bDelta, isManual, isResat, flag, durSec, recommendation}] }
-function _tr_renderTableTimeline(tnum, summary, timeline, target){
-  const shots = timeline.shots;
-  if(!shots.length){
-    return `<div style="margin-top:12px"><div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px">Table ${tnum}</div><div style="font-size:11px;color:var(--text3);font-style:italic;padding:8px 12px;background:var(--bg);border-radius:var(--r)">No shots fired yesterday.</div></div>`;
+// Detect when tables in a room have meaningfully different P1/P2 configs.
+// Returns a one-line info string, or null if all tables match.
+function _tr_detectConfigDrift(programs){
+  const tnums = Object.keys(programs);
+  if(tnums.length < 2) return null;
+  const fields = ['rampUpTarget','rampUpShotSize','maintenanceDryback','additionalDryback'];
+  const drifts = [];
+  fields.forEach(f => {
+    const vals = tnums.map(t => programs[t][f]).filter(v => v != null);
+    if(vals.length < 2) return;
+    const uniq = Array.from(new Set(vals));
+    if(uniq.length > 1){
+      const label = {rampUpTarget:'P1 target',rampUpShotSize:'P1 shot size',maintenanceDryback:'P2 dryback',additionalDryback:'P0 dryback'}[f];
+      drifts.push(`${label} varies (${uniq.join('/')}%)`);
+    }
+  });
+  if(!drifts.length) return null;
+  return 'Tables in this room run different configs: ' + drifts.join(', ') + '. Tuning each table independently.';
+}
+
+// Render one table's analysis block: P1, P2, P0 with verdicts and recommendations.
+function _tr_renderTableBlock(a){
+  const p = a.program;
+  const calibrationNote = p.onePercentShotSize
+    ? `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · ${p.onePercentShotSize}s of valve = 1% VWC`
+    : `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · (calibration unavailable)`;
+  const headerLine = `<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-top:14px;margin-bottom:6px">
+    <div style="font-size:13px;font-weight:700">Table ${a.tableNum}</div>
+    <div style="font-size:10px;color:var(--text3);font-family:var(--mono)">P1 ${p.rampUpTarget||'?'}% · P2 ${p.maintenanceDryback||'?'}% dryback · P0 ${p.additionalDryback||'?'}% dryback</div>
+  </div>
+  <div style="font-size:10px;color:var(--text3);margin-bottom:8px;font-family:var(--mono)">${calibrationNote}</div>`;
+
+  return `<div style="margin-bottom:8px">
+    ${headerLine}
+    ${_tr_renderP1Block(a)}
+    ${_tr_renderP2Block(a)}
+    ${_tr_renderP0Block(a)}
+  </div>`;
+}
+
+function _tr_renderP1Block(a){
+  const p = a.program;
+  const r = a.p1;
+  const scheduleSummary = `${p.quantity||'?'} shots × ${p.durationSec||'?'}s @ ${p.rampUpShotInterval||'?'} min intervals · ${p.rampStart||'?'}–${p.rampEnd||'?'}`;
+
+  if(!r || (r.fEnd == null && r.bEnd == null)){
+    return _tr_phaseBlockShell('P1 RAMP', scheduleSummary, null, [
+      {sev:'info', text:'No P1 endpoint data — sensor outage or program not yet run.'}
+    ]);
   }
 
-  const baselineGap = summary.baselineGap != null ? summary.baselineGap.toFixed(1) : null;
-  const vwcPerSec = summary.vwcPerSec;
-  const calibNote = vwcPerSec != null
-    ? `<span style="font-size:10px;color:var(--text3);font-weight:400">· ~${(vwcPerSec*10).toFixed(1)}% VWC per 10s of shot</span>`
-    : `<span style="font-size:10px;color:var(--text3);font-weight:400">· duration suggestions not calibrated (need more shot history)</span>`;
+  const lines = [];
+  const target = p.rampUpTarget;
+  if(target == null){
+    lines.push({sev:'info', text:`P1 ended at F ${r.fEnd!=null?r.fEnd.toFixed(1)+'%':'—'} / B ${r.bEnd!=null?r.bEnd.toFixed(1)+'%':'—'}. (No target configured.)`});
+  } else {
+    const fDiff = r.fEnd != null ? r.fEnd - target : null;
+    const bDiff = r.bEnd != null ? r.bEnd - target : null;
+    const fStatus = fDiff == null ? '—' : Math.abs(fDiff) < 2 ? '✓ on target' : (fDiff < 0 ? `${(-fDiff).toFixed(1)}% under` : `${fDiff.toFixed(1)}% over`);
+    const bStatus = bDiff == null ? '—' : Math.abs(bDiff) < 2 ? '✓ on target' : (bDiff < 0 ? `${(-bDiff).toFixed(1)}% under` : `${bDiff.toFixed(1)}% over`);
+    lines.push({sev:'data', text:`F ended P1 at <b>${r.fEnd!=null?r.fEnd.toFixed(1)+'%':'—'}</b> (${fStatus}) · B ended at <b>${r.bEnd!=null?r.bEnd.toFixed(1)+'%':'—'}</b> (${bStatus}) · target ${target}%`});
 
-  const baselineNote = baselineGap != null
-    ? `<span style="font-size:10px;color:var(--text3);font-weight:400">· typical F/B gap ${baselineGap}%</span>`
-    : '';
+    // Recommendation: adjust quantity. Each shot raises by rampUpShotSize %.
+    if(p.rampUpShotSize && p.quantity){
+      // Drive recommendation from the worse-off side that's actually below/above
+      // (ignore hydraulic gap — that's a separate issue, not a P1 quantity problem)
+      const worstDiff = (() => {
+        const fOff = fDiff != null && Math.abs(fDiff) >= 2;
+        const bOff = bDiff != null && Math.abs(bDiff) >= 2;
+        if(fOff && bOff) return Math.abs(fDiff) > Math.abs(bDiff) ? fDiff : bDiff;
+        if(fOff) return fDiff;
+        if(bOff) return bDiff;
+        return 0;
+      })();
+      if(Math.abs(worstDiff) >= 2){
+        const shotsToAdjust = Math.round(worstDiff / p.rampUpShotSize);
+        if(shotsToAdjust !== 0){
+          const newQty = Math.max(1, p.quantity - shotsToAdjust);
+          const dir = shotsToAdjust > 0 ? 'REDUCE' : 'ADD';
+          const change = shotsToAdjust > 0 ? `${shotsToAdjust} fewer shots` : `${Math.abs(shotsToAdjust)} more shots`;
+          lines.push({sev:'action', text:`<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${Math.abs(worstDiff).toFixed(1)}% closer to target.`});
+        }
+      } else {
+        lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
+      }
+    }
 
-  const fmtTime = ts => {
-    const utcH = ts.getUTCHours();
-    const utcM = ts.getUTCMinutes();
-    let localH = (utcH - 5 + 24) % 24;
-    const ampm = localH >= 12 ? 'PM' : 'AM';
-    const h12 = localH % 12 || 12;
-    return h12 + ':' + String(utcM).padStart(2,'0') + ' ' + ampm;
-  };
+    // Note hydraulic gap as a separate observation, not as a P1 fix
+    if(fDiff != null && bDiff != null){
+      const fbGap = Math.abs(r.fEnd - r.bEnd);
+      if(fbGap >= 8){
+        const drySide = r.fEnd < r.bEnd ? 'front' : 'back';
+        lines.push({sev:'info', text:`F/B gap is ${fbGap.toFixed(1)}% (${drySide} drier) — likely dripper/pressure issue, not a P1 tuning fix.`});
+      }
+    }
+  }
+  return _tr_phaseBlockShell('P1 RAMP', scheduleSummary, 'Did P1 reach Field Capacity?', lines);
+}
 
-  const fmt = v => v == null ? '—' : v.toFixed(1) + '%';
+function _tr_renderP2Block(a){
+  const p = a.program;
+  const r = a.p2;
+  const scheduleSummary = `${p.maintenanceQuantity||'?'} shots × ${p.maintenanceDurationSec||'?'}s @ ${p.maintenanceFreq||'?'} min intervals · ${p.maintenanceStart||'?'}–${p.maintenanceEnd||'?'}`;
 
-  const rowsHtml = shots.map(s => {
-    const isOk = !s.recommendation;
-    const isManualResat = s.isResat;
-    const rowBg = isOk ? 'transparent' : 'rgba(245,158,11,0.04)';
-    const rowOpacity = isOk ? '0.55' : '1';
-    const fColor = s.fDelta != null && Math.abs(s.fDelta) > 3 ? 'var(--red)' : 'var(--text)';
-    const bColor = s.bDelta != null && Math.abs(s.bDelta) > 3 ? 'var(--red)' : 'var(--text)';
-    const adjText = isManualResat
-      ? '<span style="color:var(--amber);font-weight:600">⚠ Manual resaturation</span> — symptom of yesterday\'s last evening shot being undertuned. Lengthen the final auto shot before lights-off.'
-      : isOk
-        ? '<span style="color:var(--green)">✓</span>'
-        : s.recommendation;
+  if(!r || r.cycles.length === 0){
+    return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, null, [
+      {sev:'info', text:'No P2 dryback cycles detected yesterday.'}
+    ]);
+  }
 
-    return `<div style="display:grid;grid-template-columns:80px 60px 60px 1fr;gap:8px;padding:6px 10px;font-size:11px;border-top:1px solid var(--border);background:${rowBg};opacity:${rowOpacity};align-items:center">
-      <div style="color:var(--text3);font-family:var(--mono)">${fmtTime(s.ts)}</div>
-      <div style="font-family:var(--mono);color:${fColor};font-weight:${isOk?400:600}">${fmt(s.fPeak)}</div>
-      <div style="font-family:var(--mono);color:${bColor};font-weight:${isOk?400:600}">${fmt(s.bPeak)}</div>
-      <div style="line-height:1.4">${adjText}</div>
-    </div>`;
+  const target = p.maintenanceDryback;
+  const lines = [];
+
+  if(target == null){
+    lines.push({sev:'info', text:`Measured ${r.cycles.length} P2 cycles, avg dryback ${r.avgDryback.toFixed(1)}%. (No target configured.)`});
+    return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, 'Did P2 hold the target dryback?', lines);
+  }
+
+  const diff = r.avgDryback - target;
+  const status = Math.abs(diff) < 1 ? '✓ on target' : (diff < 0 ? `${(-diff).toFixed(1)}% too shallow` : `${diff.toFixed(1)}% too deep`);
+  lines.push({sev:'data', text:`Measured ${r.cycles.length} P2 cycles · avg dryback <b>${r.avgDryback.toFixed(1)}%</b> (${status}) · target ${target}%`});
+
+  if(Math.abs(diff) >= 1 && p.maintenanceFreq){
+    // Too shallow = shots firing too often → INCREASE interval
+    // Too deep   = shots firing too rarely → DECREASE interval
+    // Magnitude: proportional. If we're getting 1% drybacks and want 3%, shots
+    // are firing 3× more often than needed. Interval should roughly triple.
+    // But capped at sane bounds.
+    const factor = target / r.avgDryback;
+    let newFreq = Math.round(p.maintenanceFreq * factor / 5) * 5; // round to nearest 5 min
+    // Cap movement at ±50% per recommendation to avoid wild swings
+    const minNew = Math.max(15, Math.round(p.maintenanceFreq * 0.5));
+    const maxNew = Math.round(p.maintenanceFreq * 2);
+    newFreq = Math.max(minNew, Math.min(maxNew, newFreq));
+    if(newFreq !== p.maintenanceFreq){
+      const dir = newFreq > p.maintenanceFreq ? 'EXTEND' : 'SHORTEN';
+      const reason = diff < 0 ? 'fewer/longer gaps between shots = bigger drybacks' : 'shorter gaps = smaller drybacks';
+      lines.push({sev:'action', text:`<b>${dir} P2 interval</b> from ${p.maintenanceFreq} → <b>${newFreq}</b> min. ${reason}.`});
+    }
+  } else if(Math.abs(diff) < 1){
+    lines.push({sev:'ok', text:`✓ P2 cycling is on target — no adjustment needed.`});
+  }
+  return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, 'Did P2 hold the target dryback?', lines);
+}
+
+function _tr_renderP0Block(a){
+  const p = a.program;
+  const r = a.p0;
+  const summary = `Lights off → next morning · target ${p.additionalDryback||'?'}% dryback`;
+
+  if(!r || r.lastPeak == null || r.morningLow == null){
+    return _tr_phaseBlockShell('P0 OVERNIGHT', summary, null, [
+      {sev:'info', text:'No overnight dryback data — sensor outage, manual resaturation, or first day of cycle.'}
+    ]);
+  }
+
+  const target = p.additionalDryback;
+  const measured = r.lastPeak - r.morningLow;
+  const lines = [];
+
+  lines.push({sev:'data', text:`Last P2 peak <b>${r.lastPeak.toFixed(1)}%</b> at ${r.lastPeakTime} → morning low <b>${r.morningLow.toFixed(1)}%</b> at ${r.morningLowTime}`});
+
+  if(target == null){
+    lines.push({sev:'info', text:`Measured overnight drop: ${measured.toFixed(1)}%. (No target configured.)`});
+    return _tr_phaseBlockShell('P0 OVERNIGHT', summary, 'Did overnight land on P0 target?', lines);
+  }
+
+  const diff = measured - target;
+  const status = Math.abs(diff) < 2 ? '✓ on target' : (diff > 0 ? `${diff.toFixed(1)}% too deep` : `${(-diff).toFixed(1)}% too shallow`);
+  lines.push({sev:'data', text:`Measured: <b>${measured.toFixed(1)}%</b> (${status}) · target ${target}%`});
+
+  if(r.morningResatFired){
+    lines.push({sev:'action', text:`⚠ You fired a morning resaturation shot — overnight dried too far. <b>LENGTHEN the last P2 shot duration</b> or <b>push the P2 end time later</b> (currently ${p.maintenanceEnd||'?'}).`});
+  } else if(Math.abs(diff) >= 2){
+    if(diff > 0){
+      // Too deep — push P2 later or lengthen last shot
+      const extraSec = p.onePercentShotSize ? Math.round(diff * p.onePercentShotSize) : null;
+      const durHint = extraSec ? ` (~+${extraSec}s on the last P2 shot)` : '';
+      lines.push({sev:'action', text:`<b>PUSH last P2 shot later</b> (currently ${p.maintenanceEnd||'?'}) or <b>LENGTHEN the last shot</b>${durHint}. Substrate dried ${diff.toFixed(1)}% too far.`});
+    } else {
+      // Too shallow — pull last P2 earlier or shorten
+      const cutSec = p.onePercentShotSize ? Math.round(-diff * p.onePercentShotSize) : null;
+      const durHint = cutSec ? ` (~-${cutSec}s on the last P2 shot)` : '';
+      lines.push({sev:'action', text:`<b>PULL last P2 shot earlier</b> (currently ${p.maintenanceEnd||'?'}) or <b>SHORTEN the last shot</b>${durHint}. Substrate held ${(-diff).toFixed(1)}% more water than target.`});
+    }
+  } else {
+    lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
+  }
+  return _tr_phaseBlockShell('P0 OVERNIGHT', summary, 'Did overnight land on P0 target?', lines);
+}
+
+// Reusable shell for one P-phase block.
+function _tr_phaseBlockShell(label, scheduleSummary, question, lines){
+  const allOk = lines.every(l => l.sev === 'ok' || l.sev === 'data');
+  const hasAction = lines.some(l => l.sev === 'action');
+  const borderColor = hasAction ? 'var(--amber)' : allOk ? 'var(--green)' : 'var(--text3)';
+  const labelColor = hasAction ? 'var(--amber)' : allOk ? 'var(--green)' : 'var(--text3)';
+
+  const linesHtml = lines.map(l => {
+    if(l.sev === 'action'){
+      return `<div style="font-size:12px;line-height:1.5;color:var(--text);padding:6px 10px;background:rgba(245,158,11,0.07);border-radius:var(--r);margin-bottom:4px">→ ${l.text}</div>`;
+    } else if(l.sev === 'ok'){
+      return `<div style="font-size:12px;line-height:1.5;color:var(--green);margin-bottom:4px">${l.text}</div>`;
+    } else if(l.sev === 'info'){
+      return `<div style="font-size:11px;line-height:1.5;color:var(--text3);font-style:italic;margin-bottom:4px">${l.text}</div>`;
+    } else { // data
+      return `<div style="font-size:12px;line-height:1.5;color:var(--text2);margin-bottom:4px">${l.text}</div>`;
+    }
   }).join('');
 
-  const okCount = shots.filter(s => !s.recommendation).length;
-  const adjCount = shots.length - okCount;
-
-  return `<div style="margin-top:14px">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;flex-wrap:wrap;gap:6px">
-      <div style="font-size:12px;font-weight:700">Table ${tnum} <span style="font-weight:400;color:var(--text3);font-size:11px">· ${shots.length} shots · ${adjCount} need adjustment · ${okCount} ✓</span></div>
-      <div>${baselineNote} ${calibNote}</div>
+  return `<div style="margin-top:8px;padding:10px 12px;border-left:3px solid ${borderColor};background:var(--bg);border-radius:0 var(--r) var(--r) 0">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:4px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:${labelColor};text-transform:uppercase">${label}</div>
+      <div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${scheduleSummary}</div>
     </div>
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
-      <div style="display:grid;grid-template-columns:80px 60px 60px 1fr;gap:8px;padding:6px 10px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;background:var(--bg3)">
-        <div>Time</div><div>Front</div><div>Back</div><div>Adjustment</div>
-      </div>
-      ${rowsHtml}
-    </div>
+    ${question ? `<div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-style:italic">${question}</div>` : ''}
+    ${linesHtml}
   </div>`;
 }
 
-// Build the timeline of yesterday's shots for one table, with verdicts.
-//
-// For each fired shot:
-//   - Find post-shot peak F and B (15 min window after fire)
-//   - Compute expected VWC at that timestamp from linear glide:
-//       morning peak (first shot of day's peak) → phase target by lights-off
-//   - Account for the table's BASELINE F/B GAP — back probes that run
-//     consistently lower than front aren't a per-shot problem; that's the
-//     table's normal hydraulics state. Expected B = expected F - baselineGap.
-//   - Flag a row when either side deviates >3% from its expected curve.
-//   - Recommendation text: "Lengthen this shot ~Ns" computed from vwcPerSec
-//   - Detect long gaps between shots (>90 min) — if VWC dropped during the
-//     gap, recommend adding a shot mid-gap.
-//
-// Returns { shots: [...] } sorted ascending in time.
-function _tr_buildPerShotTimeline(roomId, tnum, ev, hs, schedule, phaseTarget){
-  const evList = (ev[roomId] && ev[roomId][tnum]) || [];
+// Analyze yesterday's outcome for one table against its Growlink targets.
+// Returns:
+// {
+//   tableNum, program,
+//   p1: { fEnd, bEnd, fEndTime, bEndTime },
+//   p2: { cycles:[{peak, trough, drop}], avgDryback },
+//   p0: { lastPeak, lastPeakTime, morningLow, morningLowTime, morningResatFired }
+// }
+function _tr_analyzeTable(roomId, tnum, program, ev, hs){
+  if(!program) return null;
   const hsList = hs[roomId] || [];
+  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
 
-  // Yesterday window in UTC. Local day starts at 9 AM CDT (UTC 14:00).
-  // Yesterday = the 24h window ending at today's 9 AM local.
+  // Time windows — local-day based. Lights-on is from the program (e.g. "08:00:00").
+  // "Yesterday" = the irrigation day ending at today's lights-on.
+  const lightsOnLocalMin = (() => {
+    const s = String(program.lightsOnTime||'09:00:00').split(':').map(Number);
+    if(s.length < 2 || isNaN(s[0])) return 9*60;
+    return s[0]*60 + s[1];
+  })();
+  // UTC offset for facility (CDT = UTC-5). Same constant the rest of the code uses.
+  const TZ_OFFSET_MIN = 5*60;
+  const lightsOnUtcMin = (lightsOnLocalMin + TZ_OFFSET_MIN) % (24*60);
+
+  // Today's lights-on (UTC):
   const now = new Date();
-  const todayLightsOnUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 14, 0, 0));
-  // If current UTC time is before today's lights-on, we're still inside yesterday's window
+  const todayLightsOnUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), Math.floor(lightsOnUtcMin/60), lightsOnUtcMin%60, 0));
+  // If we're before today's lights-on, "today" hasn't started yet; yesterday's
+  // window ends now-ish. For simplicity, always use today's lights-on as the
+  // boundary — yesterday = [yesterdayLightsOn, todayLightsOn).
   const yesterdayLightsOnUtc = new Date(todayLightsOnUtc.getTime() - 24*60*60*1000);
-  const yesterdayLightsOffUtc = new Date(yesterdayLightsOnUtc.getTime() + 12*60*60*1000); // 12h lights cycle ending ~9 PM CDT
 
-  // All shot events in yesterday's lights-on window, sorted ascending.
-  const yesterdayShots = evList
-    .filter(e => e.ts.getTime() >= yesterdayLightsOnUtc.getTime() && e.ts.getTime() < todayLightsOnUtc.getTime())
-    .sort((a,b) => a.ts - b.ts);
+  // P1 end (local): rampEnd from schedule (e.g. "14:00:50"). Convert to UTC ms within yesterday.
+  function localTimeToYesterdayUtcMs(hms){
+    if(!hms) return null;
+    const parts = String(hms).split(':').map(Number);
+    if(parts.some(isNaN) || parts.length < 2) return null;
+    const localMin = parts[0]*60 + parts[1];
+    return yesterdayLightsOnUtc.getTime() + ((localMin - lightsOnLocalMin + 24*60) % (24*60)) * 60*1000;
+  }
+  const p1EndMs = localTimeToYesterdayUtcMs(program.rampEnd);
+  const p2StartMs = localTimeToYesterdayUtcMs(program.maintenanceStart);
+  const p2EndMs = localTimeToYesterdayUtcMs(program.maintenanceEnd);
 
-  if(yesterdayShots.length === 0) return { shots: [] };
-
-  // VWC series for this table during yesterday's window
-  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
-  const seriesYesterday = hsList.filter(h => h.ts.getTime() >= yesterdayLightsOnUtc.getTime() && h.ts.getTime() < todayLightsOnUtc.getTime());
-
-  // Compute the post-shot peak F/B for each fired event (15 min window)
-  function postShotPeak(ts){
-    const t0 = ts.getTime();
-    const t1 = t0 + 15*60*1000;
-    let pkF = null, pkB = null;
-    for(let i=0; i<seriesYesterday.length; i++){
-      const t = seriesYesterday[i].ts.getTime();
-      if(t < t0) continue;
-      if(t > t1) break;
-      if(seriesYesterday[i][fk] != null && (pkF == null || seriesYesterday[i][fk] > pkF)) pkF = seriesYesterday[i][fk];
-      if(seriesYesterday[i][bk] != null && (pkB == null || seriesYesterday[i][bk] > pkB)) pkB = seriesYesterday[i][bk];
+  // Helper: find VWC at a given time (with ±15min window). Returns {f, b}.
+  function vwcAt(targetMs){
+    let bestF = null, bestFDelta = Infinity;
+    let bestB = null, bestBDelta = Infinity;
+    for(let i=0; i<hsList.length; i++){
+      const t = hsList[i].ts.getTime();
+      const d = Math.abs(t - targetMs);
+      if(d > 15*60*1000) continue;
+      if(hsList[i][fk] != null && d < bestFDelta){ bestF = hsList[i][fk]; bestFDelta = d; }
+      if(hsList[i][bk] != null && d < bestBDelta){ bestB = hsList[i][bk]; bestBDelta = d; }
     }
-    return { pkF, pkB };
+    return { f: bestF, b: bestB };
   }
 
-  // Compute table's baseline F/B gap (median across the day)
-  const fbDiffs = [];
-  seriesYesterday.forEach(h => {
-    if(h[fk] != null && h[bk] != null) fbDiffs.push(h[fk] - h[bk]);
-  });
-  fbDiffs.sort((a,b)=>a-b);
-  const baselineGap = fbDiffs.length ? fbDiffs[Math.floor(fbDiffs.length/2)] : 0;
-
-  // Compute VWC-per-second-of-valve-open from yesterday's auto shots.
-  // Method: for each shot, take VWC immediately before fire vs post-shot peak.
-  // The DELTA divided by DURATION gives % VWC per second of valve open.
-  // Take the MEDIAN to avoid outlier-induced bad calibration.
-  const perSec = [];
-  yesterdayShots.forEach(e => {
-    if(e.isManual) return;
-    if(!e.durSec || isNaN(e.durSec) || e.durSec <= 0) return;
-    const t0 = e.ts.getTime();
-    // Pre-shot value: latest reading in the 5 min before fire
-    let preF = null, preB = null;
-    for(let i = seriesYesterday.length - 1; i >= 0; i--){
-      const t = seriesYesterday[i].ts.getTime();
-      if(t > t0) continue;
-      if(t < t0 - 5*60*1000) break;
-      if(seriesYesterday[i][fk] != null && preF == null) preF = seriesYesterday[i][fk];
-      if(seriesYesterday[i][bk] != null && preB == null) preB = seriesYesterday[i][bk];
-      if(preF != null && preB != null) break;
-    }
-    const { pkF, pkB } = postShotPeak(e.ts);
-    const fRise = (preF != null && pkF != null) ? Math.max(0, pkF - preF) : null;
-    const bRise = (preB != null && pkB != null) ? Math.max(0, pkB - preB) : null;
-    // Average the two sides since the valve fires water that hits both
-    if(fRise != null && bRise != null){
-      perSec.push((fRise + bRise) / 2 / e.durSec);
-    } else if(fRise != null){
-      perSec.push(fRise / e.durSec);
-    } else if(bRise != null){
-      perSec.push(bRise / e.durSec);
-    }
-  });
-  perSec.sort((a,b)=>a-b);
-  // Median, but only trust it if we have >= 3 samples
-  const vwcPerSec = perSec.length >= 3 ? perSec[Math.floor(perSec.length/2)] : null;
-
-  // Morning peak (highest F+B avg in the first 90 min of yesterday's window)
-  let morningPeakF = null, morningPeakB = null;
-  const morningWinEnd = yesterdayLightsOnUtc.getTime() + 90*60*1000;
-  seriesYesterday.forEach(h => {
-    if(h.ts.getTime() > morningWinEnd) return;
-    if(h[fk] != null && (morningPeakF == null || h[fk] > morningPeakF)) morningPeakF = h[fk];
-    if(h[bk] != null && (morningPeakB == null || h[bk] > morningPeakB)) morningPeakB = h[bk];
-  });
-  // If no morning peak, fall back to first shot's post-shot peak
-  if(morningPeakF == null || morningPeakB == null){
-    const first = postShotPeak(yesterdayShots[0].ts);
-    if(morningPeakF == null) morningPeakF = first.pkF;
-    if(morningPeakB == null) morningPeakB = first.pkB;
+  // ── P1 endpoint: VWC at p1EndMs + 15 min (post-last-P1-shot peak) ──
+  let p1 = null;
+  if(p1EndMs){
+    const peakMs = p1EndMs + 15*60*1000;
+    const {f, b} = vwcAt(peakMs);
+    p1 = { fEnd: f, bEnd: b };
   }
 
-  // Expected VWC at any timestamp: linear glide from morning peak → target
-  // F target = phaseTarget; B target = phaseTarget - baselineGap (since back
-  //   typically runs lower, we tune it to its own baseline-adjusted target)
-  // Note: if baselineGap is positive (F > B), B target is lower. If gap is
-  //   negative (B > F), the target shifts the other way. Either way we
-  //   evaluate each side against where IT should be on its own curve.
-  const cycleStartMs = yesterdayLightsOnUtc.getTime();
-  const cycleEndMs   = yesterdayLightsOffUtc.getTime();
-  function expectedAt(ts, side){
-    const t = ts.getTime();
-    const progress = Math.max(0, Math.min(1, (t - cycleStartMs) / (cycleEndMs - cycleStartMs)));
-    const peak = side === 'F' ? morningPeakF : morningPeakB;
-    const baseTarget = phaseTarget - (side === 'B' ? baselineGap : 0);
-    if(peak == null) return null;
-    return peak + (baseTarget - peak) * progress;
-  }
-
-  // Build each shot row
-  const RESAT_WINDOW_START_UTC_H = 12;
-  const RESAT_WINDOW_END_UTC_H   = 15;
-  const DEVIATION_TOL = 3.0; // ±3% from expected curve = ✓
-
-  const shots = [];
-  yesterdayShots.forEach((e, idx) => {
-    const { pkF, pkB } = postShotPeak(e.ts);
-    const expF = expectedAt(e.ts, 'F');
-    const expB = expectedAt(e.ts, 'B');
-    const fDelta = (pkF != null && expF != null) ? pkF - expF : null;
-    const bDelta = (pkB != null && expB != null) ? pkB - expB : null;
-
-    // Manual resat detection (morning window)
-    const h = e.ts.getUTCHours();
-    const isResat = e.isManual && h >= RESAT_WINDOW_START_UTC_H && h < RESAT_WINDOW_END_UTC_H;
-
-    // Recommendation: lengthen / shorten / fine
-    let recommendation = null;
-    if(!isResat){
-      const fOff = fDelta != null && Math.abs(fDelta) > DEVIATION_TOL;
-      const bOff = bDelta != null && Math.abs(bDelta) > DEVIATION_TOL;
-      if(fOff || bOff){
-        // Use the worse side to drive the magnitude of recommendation
-        const driverDelta = (() => {
-          if(fOff && bOff) return Math.abs(fDelta) > Math.abs(bDelta) ? fDelta : bDelta;
-          return fOff ? fDelta : bDelta;
-        })();
-        const direction = driverDelta < 0 ? 'lengthen' : 'shorten';
-        const which = fOff && bOff ? 'F+B both' : (fOff ? 'F' : 'B') + ' off';
-        // Convert delta to seconds via vwcPerSec
-        let secondsText;
-        if(vwcPerSec && vwcPerSec > 0){
-          const deltaPct = Math.abs(driverDelta);
-          const secondsDelta = Math.round(deltaPct / vwcPerSec);
-          const cappedSeconds = Math.max(2, Math.min(30, secondsDelta));
-          secondsText = `~${cappedSeconds}s`;
+  // ── P2 dryback cycles ──
+  // Take the F+B average VWC series within [p2StartMs, p2EndMs]. Walk through
+  // events for this table firing in that window. For each consecutive pair of
+  // events, take the post-shot peak (15min after first) and the trough just
+  // before the next event. dryback = peak - trough.
+  let p2 = null;
+  if(p2StartMs && p2EndMs && ev[roomId] && ev[roomId][tnum]){
+    const events = ev[roomId][tnum]
+      .filter(e => !e.isManual && e.ts.getTime() >= p2StartMs && e.ts.getTime() <= p2EndMs)
+      .sort((a,b) => a.ts - b.ts);
+    const cycles = [];
+    for(let i = 0; i < events.length - 1; i++){
+      const t1 = events[i].ts.getTime();
+      const t2 = events[i+1].ts.getTime();
+      // Peak: max VWC in [t1, t1+20min]
+      let peak = null;
+      // Trough: min VWC in [t1+20min, t2]
+      let trough = null;
+      for(let j = 0; j < hsList.length; j++){
+        const t = hsList[j].ts.getTime();
+        if(t < t1) continue;
+        if(t > t2) break;
+        const avg = (hsList[j][fk]!=null && hsList[j][bk]!=null) ? (hsList[j][fk]+hsList[j][bk])/2 : (hsList[j][fk]!=null ? hsList[j][fk] : hsList[j][bk]);
+        if(avg == null) continue;
+        if(t <= t1 + 20*60*1000){
+          if(peak == null || avg > peak) peak = avg;
         } else {
-          secondsText = direction === 'lengthen' ? '~5s' : '~3s';
+          if(trough == null || avg < trough) trough = avg;
         }
-        const reasonBits = [];
-        if(fOff) reasonBits.push(`F ${pkF.toFixed(0)}% vs expected ${expF.toFixed(0)}%`);
-        if(bOff) reasonBits.push(`B ${pkB.toFixed(0)}% vs expected ${expB.toFixed(0)}%`);
-        recommendation = `${direction.charAt(0).toUpperCase()+direction.slice(1)} this shot <b>${secondsText}</b> — ${reasonBits.join(', ')}.`;
+      }
+      if(peak != null && trough != null && peak > trough){
+        cycles.push({ peak, trough, drop: peak - trough });
       }
     }
-
-    shots.push({
-      ts: e.ts,
-      fPeak: pkF, bPeak: pkB,
-      fExpected: expF, bExpected: expB,
-      fDelta, bDelta,
-      isManual: e.isManual,
-      isResat,
-      flag: e.flag,
-      durSec: e.durSec,
-      recommendation,
-    });
-  });
-
-  // Check for long gaps between shots → suggest adding a shot
-  // Definition: gap > 90 min AND VWC dropped meaningfully (> 3%) below
-  // expected on either side somewhere in the gap.
-  for(let i = 0; i < shots.length - 1; i++){
-    if(shots[i].recommendation) continue; // already flagged
-    const a = shots[i], b = shots[i+1];
-    const gapMin = (b.ts.getTime() - a.ts.getTime()) / 60000;
-    if(gapMin < 90) continue;
-    // Find lowest deviation during the gap
-    const tStart = a.ts.getTime() + 15*60*1000; // start looking 15 min after a (skip post-shot equilibration)
-    const tEnd = b.ts.getTime();
-    let worstDev = 0;
-    for(let j = 0; j < seriesYesterday.length; j++){
-      const t = seriesYesterday[j].ts.getTime();
-      if(t < tStart) continue;
-      if(t > tEnd) break;
-      const expFJ = expectedAt(seriesYesterday[j].ts, 'F');
-      const expBJ = expectedAt(seriesYesterday[j].ts, 'B');
-      const f = seriesYesterday[j][fk], bv = seriesYesterday[j][bk];
-      if(f != null && expFJ != null && (f - expFJ) < worstDev) worstDev = f - expFJ;
-      if(bv != null && expBJ != null && (bv - expBJ) < worstDev) worstDev = bv - expBJ;
-    }
-    if(worstDev < -3){
-      const midMs = a.ts.getTime() + (gapMin/2) * 60000;
-      const mid = new Date(midMs);
-      const utcH = mid.getUTCHours();
-      const utcM = mid.getUTCMinutes();
-      let localH = (utcH - 5 + 24) % 24;
-      const ampm = localH >= 12 ? 'PM' : 'AM';
-      const h12 = localH % 12 || 12;
-      const midStr = h12 + ':' + String(utcM).padStart(2,'0') + ' ' + ampm;
-      a.recommendation = (a.recommendation ? a.recommendation + ' ' : '') + `Also: VWC dropped ${Math.abs(worstDev).toFixed(1)}% below target during the ${Math.round(gapMin)}-min gap before the next shot — consider <b>adding a shot around ${midStr}</b>.`;
+    if(cycles.length){
+      const avgDryback = cycles.reduce((s,c) => s + c.drop, 0) / cycles.length;
+      p2 = { cycles, avgDryback };
+    } else {
+      p2 = { cycles: [], avgDryback: 0 };
     }
   }
 
-  return { shots };
-}
+  // ── P0 overnight ──
+  // Last P2 peak: VWC right after the last P2 fire event yesterday.
+  // Morning low: lowest VWC between lights-off and today's lights-on.
+  let p0 = null;
+  if(ev[roomId] && ev[roomId][tnum] && p2EndMs){
+    const lastP2 = ev[roomId][tnum]
+      .filter(e => !e.isManual && e.ts.getTime() >= (p2StartMs||0) && e.ts.getTime() <= p2EndMs)
+      .sort((a,b) => b.ts - a.ts)[0];
+    if(lastP2){
+      const peakMs = lastP2.ts.getTime() + 15*60*1000;
+      const {f, b} = vwcAt(peakMs);
+      const lastPeak = (f!=null && b!=null) ? (f+b)/2 : (f!=null ? f : b);
 
-// Per-table summary stats used by the renderer (and the hydraulics flagger).
-// Lighter than the old _tr_buildTableData — focused on what the new view needs.
-function _tr_buildTableSummary(roomId, tnum, probesByTable, ev, hs, phaseTarget){
-  const fProbe = probesByTable['T'+tnum+'F'];
-  const bProbe = probesByTable['T'+tnum+'B'];
-  const hsList = hs[roomId] || [];
-  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
-
-  // Failing-run detection (only when VWC drops below target during the run)
-  const evList = (ev[roomId] && ev[roomId][tnum]) || [];
-  const cutoff = Date.now() - 24*60*60*1000;
-  const recentAuto = evList.filter(e => e.ts.getTime() >= cutoff && !e.isManual);
-
-  // Post-shot avg VWC per event
-  const postShotVwc = [];
-  recentAuto.forEach(e => {
-    const targetMs = e.ts.getTime() + 15*60*1000;
-    let vF = null, vB = null;
-    for(let i=0; i<hsList.length; i++){
-      const t = hsList[i].ts.getTime();
-      if(t < targetMs - 5*60*1000) continue;
-      if(t > targetMs + 10*60*1000) break;
-      if(hsList[i][fk] != null && vF == null) vF = hsList[i][fk];
-      if(hsList[i][bk] != null && vB == null) vB = hsList[i][bk];
-      if(vF != null && vB != null) break;
-    }
-    const v = (vF != null && vB != null) ? (vF+vB)/2 : (vF != null ? vF : vB);
-    postShotVwc.push(v);
-  });
-
-  let failingRun = 0, failingDeclinePct = 0;
-  let curRunStart = null;
-  for(let i = 1; i < postShotVwc.length; i++){
-    const prev = postShotVwc[i-1], cur = postShotVwc[i];
-    if(prev == null || cur == null){ curRunStart = null; continue; }
-    if(cur < prev){
-      if(curRunStart == null) curRunStart = i - 1;
-      const runLen = i - curRunStart + 1;
-      const runDecline = postShotVwc[curRunStart] - cur;
-      let belowTargetInRun = false;
-      if(phaseTarget != null){
-        for(let j = curRunStart; j <= i; j++){
-          if(postShotVwc[j] != null && postShotVwc[j] < phaseTarget){ belowTargetInRun = true; break; }
+      // Morning low: min VWC between lastP2 peak and today's lights-on
+      let morningLow = null, morningLowTs = null;
+      for(let i = 0; i < hsList.length; i++){
+        const t = hsList[i].ts.getTime();
+        if(t < peakMs) continue;
+        if(t > todayLightsOnUtc.getTime()) break;
+        const avg = (hsList[i][fk]!=null && hsList[i][bk]!=null) ? (hsList[i][fk]+hsList[i][bk])/2 : (hsList[i][fk]!=null ? hsList[i][fk] : hsList[i][bk]);
+        if(avg == null) continue;
+        if(morningLow == null || avg < morningLow){
+          morningLow = avg;
+          morningLowTs = hsList[i].ts;
         }
-      } else belowTargetInRun = true;
-      if(runLen >= 3 && runDecline > 1.0 && belowTargetInRun &&
-         (runLen > failingRun || runDecline > failingDeclinePct)){
-        failingRun = runLen;
-        failingDeclinePct = runDecline;
       }
-    } else curRunStart = null;
+
+      // Did a morning resaturation shot fire?
+      const RESAT_WINDOW_START_UTC_H = 12;
+      const RESAT_WINDOW_END_UTC_H = 15;
+      const morningResatFired = ev[roomId][tnum].some(e => {
+        if(!e.isManual) return false;
+        if(e.ts.getTime() < (todayLightsOnUtc.getTime() - 3*60*60*1000)) return false;
+        if(e.ts.getTime() > (todayLightsOnUtc.getTime() + 3*60*60*1000)) return false;
+        const h = e.ts.getUTCHours();
+        return h >= RESAT_WINDOW_START_UTC_H && h < RESAT_WINDOW_END_UTC_H;
+      });
+
+      const fmtTime = d => {
+        if(!d) return '—';
+        const utcH = d.getUTCHours();
+        const utcM = d.getUTCMinutes();
+        let localH = (utcH - 5 + 24) % 24;
+        const ampm = localH >= 12 ? 'PM' : 'AM';
+        const h12 = localH % 12 || 12;
+        return h12 + ':' + String(utcM).padStart(2,'0') + ' ' + ampm;
+      };
+
+      p0 = {
+        lastPeak,
+        lastPeakTime: fmtTime(lastP2.ts),
+        morningLow,
+        morningLowTime: fmtTime(morningLowTs),
+        morningResatFired,
+      };
+    }
   }
 
-  // Baseline F/B gap from yesterday's full data
-  const fbDiffs = [];
-  const sinceMs = Date.now() - 36*60*60*1000;
-  hsList.forEach(h => {
-    if(h.ts.getTime() < sinceMs) return;
-    if(h[fk] != null && h[bk] != null) fbDiffs.push(h[fk] - h[bk]);
-  });
-  fbDiffs.sort((a,b)=>a-b);
-  const baselineGap = fbDiffs.length ? fbDiffs[Math.floor(fbDiffs.length/2)] : null;
-
-  // Median VWC-per-second from recent auto shots (same logic as in buildPerShotTimeline,
-  // but ranging over the full 36h history for a stable calibration estimate).
-  // Note: we duplicate this loop here so the summary header can show calibration
-  // even before the per-shot timeline runs. Both functions converge on the same
-  // value when given the same input window.
-  const perSec = [];
-  recentAuto.forEach(e => {
-    if(!e.durSec || isNaN(e.durSec) || e.durSec <= 0) return;
-    const t0 = e.ts.getTime();
-    let preF = null, preB = null;
-    for(let i = hsList.length - 1; i >= 0; i--){
-      const t = hsList[i].ts.getTime();
-      if(t > t0) continue;
-      if(t < t0 - 5*60*1000) break;
-      if(hsList[i][fk] != null && preF == null) preF = hsList[i][fk];
-      if(hsList[i][bk] != null && preB == null) preB = hsList[i][bk];
-      if(preF != null && preB != null) break;
-    }
-    const t1 = t0 + 15*60*1000;
-    let pkF = null, pkB = null;
-    for(let i=0; i<hsList.length; i++){
-      const t = hsList[i].ts.getTime();
-      if(t < t0) continue;
-      if(t > t1) break;
-      if(hsList[i][fk] != null && (pkF == null || hsList[i][fk] > pkF)) pkF = hsList[i][fk];
-      if(hsList[i][bk] != null && (pkB == null || hsList[i][bk] > pkB)) pkB = hsList[i][bk];
-    }
-    const fRise = (preF != null && pkF != null) ? Math.max(0, pkF - preF) : null;
-    const bRise = (preB != null && pkB != null) ? Math.max(0, pkB - preB) : null;
-    if(fRise != null && bRise != null) perSec.push((fRise + bRise) / 2 / e.durSec);
-    else if(fRise != null) perSec.push(fRise / e.durSec);
-    else if(bRise != null) perSec.push(bRise / e.durSec);
-  });
-  perSec.sort((a,b)=>a-b);
-  const vwcPerSec = perSec.length >= 3 ? perSec[Math.floor(perSec.length/2)] : null;
-
-  const hasData = (fProbe || bProbe || recentAuto.length > 0);
-
-  return {
-    hasData,
-    failingRun,
-    failingDeclinePct,
-    baselineGap,
-    vwcPerSec,
-  };
+  return { tableNum: tnum, program, p1, p2, p0 };
 }
-
 function renderBlueprint(){
   renderBlueprintGlobal();
   renderBlueprintPhases();
