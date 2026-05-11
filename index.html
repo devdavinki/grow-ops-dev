@@ -9606,6 +9606,92 @@ function _tr_detectConfigDrift(programs){
   return 'Tables in this room run different configs: ' + drifts.join(', ') + '. Tuning each table independently.';
 }
 
+// Schedule sanity checks. Catches schedule-entry mistakes in Growlink
+// (e.g. "P1 ends at midnight, P2 starts at 1 AM" — wrong AM/PM, transposed
+// digits, or someone misunderstood the timer semantics).
+//
+// Returns an array of issue strings. Empty array = schedule looks sensible.
+//
+// We only flag things that are very unlikely to be intentional. Per-table
+// quantity drift is intentional ("we vary it when one table behaves differently")
+// so we don't flag that here.
+function _tr_detectScheduleSanityIssues(p){
+  const issues = [];
+  if(!p) return issues;
+
+  // Helper: HH:MM:SS → minutes from midnight (local)
+  const toMin = s => {
+    if(!s) return null;
+    const parts = String(s).split(':').map(Number);
+    if(parts.some(isNaN) || parts.length < 2) return null;
+    return parts[0]*60 + parts[1];
+  };
+  const p1Start = toMin(p.rampStart);
+  const p1End   = toMin(p.rampEnd);
+  const p2Start = toMin(p.maintenanceStart);
+  const p2End   = toMin(p.maintenanceEnd);
+  const lightsOn = toMin(p.lightsOnTime) || (8*60);
+
+  // ── Check 1: P1 ends in the middle of the night ──
+  // Normal P1 ends 2 PM–7 PM (14:00–19:00). Anything past 8 PM is suspicious.
+  // The real Room 8 example: P1 ends 00:00:45 (midnight). Catastrophic.
+  if(p1End != null){
+    const inNightWindow = p1End >= 20*60 || p1End < 6*60;
+    if(inNightWindow){
+      const display = p.rampEnd.replace(/:\d{2}$/, ''); // strip seconds
+      issues.push(`P1 ramp ends at <b>${display}</b> — that's in the night. P1 normally ends afternoon/early evening. Check the time in Growlink.`);
+    }
+  }
+
+  // ── Check 2: P2 starts after midnight ──
+  // P2 should follow P1 in the same afternoon/evening. P2 starting after midnight
+  // means it's running during what should be the overnight dryback window.
+  if(p2Start != null){
+    if(p2Start >= 0 && p2Start < 6*60){
+      const display = p.maintenanceStart.replace(/:\d{2}$/, '');
+      issues.push(`P2 maintenance starts at <b>${display}</b> — that's the middle of the night, when substrate should be drying back. Check the time in Growlink.`);
+    }
+  }
+
+  // ── Check 3: P2 ends within 4 hours of lights-on (no overnight dryback) ──
+  // We need at least ~4h of "no irrigation" before lights-on to get a measurable
+  // P0 dryback. If P2 ends at 6 AM and lights-on is 8 AM, only 2h of dryback —
+  // that's not crop steering, that's continuous watering.
+  if(p2End != null && lightsOn != null){
+    // Compute how long after P2 ends before lights-on (handle midnight wrap)
+    let drybackMin = lightsOn - p2End;
+    if(drybackMin < 0) drybackMin += 24*60;
+    if(drybackMin < 4*60){
+      const display = p.maintenanceEnd.replace(/:\d{2}$/, '');
+      issues.push(`P2 ends at <b>${display}</b> with lights-on at ${p.lightsOnTime.replace(/:\d{2}$/,'')} — only ${(drybackMin/60).toFixed(1)}h of overnight dryback. Need at least 4h for a real P0. Check P2 end time in Growlink.`);
+    }
+  }
+
+  // ── Check 4: P1→P2 gap or overlap ──
+  // Normal: P2 starts 30-90 min after P1 ends (gives substrate a chance to begin
+  // drying back before maintenance kicks in). Bigger gaps = dead time, which can
+  // mean someone entered the wrong start time. Overlaps mean P2 was scheduled
+  // before P1 finished.
+  if(p1End != null && p2Start != null){
+    // Use the convention: P2 follows P1 within the same operational day.
+    // If P2 numerically appears earlier than P1 (e.g. P1 ends 22:00, P2 starts
+    // 01:00 next day), add 24h to P2Start for the comparison.
+    let p2StartAdj = p2Start;
+    if(p2StartAdj < p1End) p2StartAdj += 24*60;
+    const gapMin = p2StartAdj - p1End;
+    if(gapMin > 3*60){
+      issues.push(`<b>${(gapMin/60).toFixed(1)}h gap</b> between P1 end (${p.rampEnd.replace(/:\d{2}$/,'')}) and P2 start (${p.maintenanceStart.replace(/:\d{2}$/,'')}). That's a lot of dead time — usually P2 starts within an hour of P1 ending. Check Growlink.`);
+    }
+    // Overlap detection: P2 starts before P1 ends ON THE SAME DAY (not next-day)
+    // We check this by seeing if p2Start (un-adjusted) is between p1Start and p1End.
+    if(p1Start != null && p2Start >= p1Start && p2Start < p1End){
+      issues.push(`P2 starts at ${p.maintenanceStart.replace(/:\d{2}$/,'')} but P1 doesn't end until ${p.rampEnd.replace(/:\d{2}$/,'')} — they overlap. Two programs trying to fire at the same time. Fix in Growlink.`);
+    }
+  }
+
+  return issues;
+}
+
 // Render one table's analysis block: P1, P2, P0 with verdicts and recommendations.
 function _tr_renderTableBlock(a){
   const p = a.program;
@@ -9618,8 +9704,17 @@ function _tr_renderTableBlock(a){
   </div>
   <div style="font-size:10px;color:var(--text3);margin-bottom:8px;font-family:var(--mono)">${calibrationNote}</div>`;
 
+  // Schedule sanity check — catches Growlink data-entry errors that look like
+  // "P1 ends at midnight, P2 fires at 1 AM" type mistakes
+  const sanityIssues = _tr_detectScheduleSanityIssues(p);
+  const sanityBanner = sanityIssues.length ? `<div style="margin:0 0 8px;padding:10px 12px;background:rgba(245,158,11,0.10);border-left:3px solid var(--amber);border-radius:0 var(--r) var(--r) 0">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--amber);text-transform:uppercase;margin-bottom:6px">⚠ Schedule looks misconfigured</div>
+    ${sanityIssues.map(s => `<div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:4px">→ ${s}</div>`).join('')}
+  </div>` : '';
+
   return `<div style="margin-bottom:8px">
     ${headerLine}
+    ${sanityBanner}
     ${_tr_renderP1Block(a)}
     ${_tr_renderP2Block(a)}
     ${_tr_renderP0Block(a)}
