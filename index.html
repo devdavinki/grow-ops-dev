@@ -9517,7 +9517,7 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
   const dbTarget = phase.dryback;
   const probesByTable = pm[room.id] || {};
 
-  const tables = [1,2,3].map(tnum => _tr_buildTableData(room.id, tnum, probesByTable, ev, hs, [])).filter(t => t.hasData);
+  const tables = [1,2,3].map(tnum => _tr_buildTableData(room.id, tnum, probesByTable, ev, hs, [], target)).filter(t => t.hasData);
 
   // Three buckets, in order of priority for the operator:
   //   1. hydraulics — broken stuff, fix before tuning
@@ -9684,14 +9684,57 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
 }
 
 // Build per-table data: morning VWC F/B, overnight dryback F/B, phantom/manual shot counts
-function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
+function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles, phaseTarget){
   const fKey = 'T'+tnum+'F';
   const bKey = 'T'+tnum+'B';
   const fProbe = probesByTable[fKey];
   const bProbe = probesByTable[bKey];
-  // Prefer V2 morning_low_vwc (pre-irrigation low). Fall back to day_low_vwc.
-  const mF = fProbe ? (fProbe.mLow != null && fProbe.mLow !== '' ? parseFloat(fProbe.mLow) : (fProbe.dayLowVwc!=null?parseFloat(fProbe.dayLowVwc):null)) : null;
-  const mB = bProbe ? (bProbe.mLow != null && bProbe.mLow !== '' ? parseFloat(bProbe.mLow) : (bProbe.dayLowVwc!=null?parseFloat(bProbe.dayLowVwc):null)) : null;
+
+  // Sanity-check morning_low_vwc against (a) yesterday's peak and (b) the most
+  // recent live VWC from GL_History. The Apps Script morning-low calculation
+  // can latch onto sensor dropouts (single-reading dips to 0-20% range) when
+  // the probe glitched briefly overnight. We reject the value if it looks
+  // implausible and fall back to day_low_vwc, then to current VWC.
+  //
+  // Rejection rules:
+  //   1. mLow < 25%  AND yesterday_peak_vwc > 50%  → glitch (>25 pt drop is not real)
+  //   2. mLow more than 40 points below the latest live reading → also glitch
+  //
+  // Returns the validated value, or null if no trustworthy reading exists.
+  function pickMorningVwc(probe, currentVwc){
+    if(!probe) return null;
+    const mLowRaw   = probe.mLow      != null && probe.mLow      !== '' ? parseFloat(probe.mLow)      : null;
+    const dayLow    = probe.dayLowVwc != null && probe.dayLowVwc !== '' ? parseFloat(probe.dayLowVwc) : null;
+    const yPeak     = probe.yPeak     != null && probe.yPeak     !== '' ? parseFloat(probe.yPeak)     : null;
+
+    // Try mLow first with sanity checks
+    if(mLowRaw != null && !isNaN(mLowRaw)){
+      const glitchVsPeak = (mLowRaw < 25 && yPeak != null && yPeak > 50);
+      const glitchVsLive = (currentVwc != null && (currentVwc - mLowRaw) > 40);
+      if(!glitchVsPeak && !glitchVsLive) return mLowRaw;
+      // Otherwise fall through to alternatives
+    }
+    // Fallback: today's day_low_vwc (more conservative — full-day minimum)
+    if(dayLow != null && !isNaN(dayLow) && dayLow >= 20) return dayLow;
+    // Last resort: current live VWC (won't match "morning low" semantics
+    // but at least won't show garbage)
+    if(currentVwc != null) return currentVwc;
+    return null;
+  }
+
+  // Get the most recent live VWC from GL_History (for sanity-check + fallback)
+  const hsList = hs[roomId] || [];
+  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
+  let liveF = null, liveB = null;
+  for(let i = hsList.length - 1; i >= 0; i--){
+    if(liveF == null && hsList[i][fk] != null) liveF = hsList[i][fk];
+    if(liveB == null && hsList[i][bk] != null) liveB = hsList[i][bk];
+    if(liveF != null && liveB != null) break;
+  }
+
+  const mF = pickMorningVwc(fProbe, liveF);
+  const mB = pickMorningVwc(bProbe, liveB);
+
   // Overnight dryback points (V2). Convert to % using yPeak as denominator if available.
   function ovPct(probe){
     if(!probe) return null;
@@ -9721,9 +9764,8 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
   let morningResatShots = 0;     // manual shots in the resaturation window (lights-on → first auto shot)
                                  // these are routine and signal the night cycle dried back too much
   const evList = (ev[roomId] && ev[roomId][tnum]) || [];
-  const hsList = hs[roomId] || [];
   const cutoff = Date.now() - 24*60*60*1000;
-  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
+  // hsList, fk, bk already declared above for morning-VWC sanity check
 
   // Classify manual shots:
   //   - "morning resat" = fired between 7 AM and 10 AM local time (UTC-5 in CDT).
@@ -9769,9 +9811,16 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
   });
 
   // Walk the sequence looking for the longest declining run.
-  // A "declining" shot = post-shot VWC < previous post-shot VWC by ANY amount.
-  // We require both a run length >= 3 AND a cumulative decline > 1.0%
-  // before flagging — that filters out normal noise.
+  //
+  // A failing-shot run is ONLY flagged when:
+  //   1. 3+ consecutive shots with post-shot VWC declining each step
+  //   2. Cumulative decline > 1.0% across the run
+  //   3. AT LEAST ONE post-shot VWC value during the run is BELOW the phase target
+  //
+  // Rule 3 is critical: if VWC stays above target during a maintenance run,
+  // the "decline" is engineered dryback (the cycle deliberately stepping down
+  // from morning peak toward target), NOT failing hydraulics. Only flag a run
+  // when the substrate actually drops below where we want it.
   let curRunStart = null;     // index in postShotVwc where the current run started
   for(let i = 1; i < postShotVwc.length; i++){
     const prev = postShotVwc[i-1], cur = postShotVwc[i];
@@ -9783,7 +9832,22 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
       if(curRunStart == null) curRunStart = i - 1;
       const runLen = i - curRunStart + 1;
       const runDecline = postShotVwc[curRunStart] - cur;
-      if(runLen >= 3 && runDecline > 1.0 && (runLen > failingRun || runDecline > failingDeclinePct)){
+      // Check if any reading in the run is below target. If not, the decline
+      // is desired (engineered descent), not a failure.
+      let belowTargetInRun = false;
+      if(phaseTarget != null){
+        for(let j = curRunStart; j <= i; j++){
+          if(postShotVwc[j] != null && postShotVwc[j] < phaseTarget){
+            belowTargetInRun = true;
+            break;
+          }
+        }
+      } else {
+        // No target known — fall back to length+decline check alone
+        belowTargetInRun = true;
+      }
+      if(runLen >= 3 && runDecline > 1.0 && belowTargetInRun &&
+         (runLen > failingRun || runDecline > failingDeclinePct)){
         failingRun = runLen;
         failingDeclinePct = runDecline;
       }
