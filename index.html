@@ -9649,9 +9649,23 @@ function _tr_renderP1Block(a){
     lines.push({sev:'data', text:`F ended P1 at <b>${r.fEnd!=null?r.fEnd.toFixed(1)+'%':'—'}</b> (${fStatus}) · B ended at <b>${r.bEnd!=null?r.bEnd.toFixed(1)+'%':'—'}</b> (${bStatus}) · target ${target}%`});
 
     // Recommendation: adjust quantity. Each shot raises by rampUpShotSize %.
-    if(p.rampUpShotSize && p.quantity){
-      // Drive recommendation from the worse-off side that's actually below/above
-      // (ignore hydraulic gap — that's a separate issue, not a P1 quantity problem)
+    //
+    // SUPPRESS the quantity recommendation entirely when F/B gap is wide
+    // (>8%). In that situation the two sides are telling different stories
+    // and the worst-off side is usually hydraulically starved (or flooded)
+    // rather than under/over P1 shot count. Adding or removing P1 shots
+    // tunes to the broken probe and makes the healthy side worse. The
+    // operator needs to fix dripper flow / line pressure first.
+    const fbGap = (fDiff != null && bDiff != null) ? Math.abs(r.fEnd - r.bEnd) : 0;
+    const HYDRAULIC_GAP_PCT = 8;
+    const suppressForHydraulics = fbGap >= HYDRAULIC_GAP_PCT;
+
+    if(suppressForHydraulics){
+      const drySide = r.fEnd < r.bEnd ? 'front' : 'back';
+      lines.push({sev:'action', text:`⚠ F/B gap is ${fbGap.toFixed(1)}% (${drySide} drier) — <b>fix hydraulics first</b> (dripper flow, line pressure on the ${drySide} side). Adding or removing P1 shots will tune to one probe and worsen the other.`});
+    } else if(p.rampUpShotSize && p.quantity){
+      // Both sides agree directionally (gap is small). Use the worse-off
+      // side to drive the magnitude of the quantity change.
       const worstDiff = (() => {
         const fOff = fDiff != null && Math.abs(fDiff) >= 2;
         const bOff = bDiff != null && Math.abs(bDiff) >= 2;
@@ -9661,24 +9675,27 @@ function _tr_renderP1Block(a){
         return 0;
       })();
       if(Math.abs(worstDiff) >= 2){
-        const shotsToAdjust = Math.round(worstDiff / p.rampUpShotSize);
-        if(shotsToAdjust !== 0){
-          const newQty = Math.max(1, p.quantity - shotsToAdjust);
-          const dir = shotsToAdjust > 0 ? 'REDUCE' : 'ADD';
-          const change = shotsToAdjust > 0 ? `${shotsToAdjust} fewer shots` : `${Math.abs(shotsToAdjust)} more shots`;
-          lines.push({sev:'action', text:`<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${Math.abs(worstDiff).toFixed(1)}% closer to target.`});
+        let shotsToAdjust = Math.round(worstDiff / p.rampUpShotSize);
+        // CAP magnitude at ±50% of current quantity. Anything bigger than
+        // that is data quality, not tuning — surface as a warning instead
+        // of a destructive recommendation.
+        const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
+        const cappedAdjust = Math.max(-maxAdjust, Math.min(maxAdjust, shotsToAdjust));
+        const wasCapped = (cappedAdjust !== shotsToAdjust);
+        const newQty = Math.max(1, p.quantity - cappedAdjust);
+
+        if(cappedAdjust !== 0){
+          const dir = cappedAdjust > 0 ? 'REDUCE' : 'ADD';
+          const change = cappedAdjust > 0 ? `${cappedAdjust} fewer shots` : `${Math.abs(cappedAdjust)} more shots`;
+          const closesPct = Math.abs(cappedAdjust) * p.rampUpShotSize;
+          let text = `<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${closesPct.toFixed(1)}% closer to target.`;
+          if(wasCapped){
+            text += ` <span style="color:var(--text3)">(Capped: full correction would need ${Math.abs(shotsToAdjust)} shots, suggests data quality issue or major program drift.)</span>`;
+          }
+          lines.push({sev:'action', text});
         }
       } else {
         lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
-      }
-    }
-
-    // Note hydraulic gap as a separate observation, not as a P1 fix
-    if(fDiff != null && bDiff != null){
-      const fbGap = Math.abs(r.fEnd - r.bEnd);
-      if(fbGap >= 8){
-        const drySide = r.fEnd < r.bEnd ? 'front' : 'back';
-        lines.push({sev:'info', text:`F/B gap is ${fbGap.toFixed(1)}% (${drySide} drier) — likely dripper/pressure issue, not a P1 tuning fix.`});
       }
     }
   }
@@ -9848,7 +9865,12 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
   }
   const p1EndMs = localTimeToYesterdayUtcMs(program.rampEnd);
   const p2StartMs = localTimeToYesterdayUtcMs(program.maintenanceStart);
-  const p2EndMs = localTimeToYesterdayUtcMs(program.maintenanceEnd);
+  let p2EndMs = localTimeToYesterdayUtcMs(program.maintenanceEnd);
+  // Wrap: if maintenance_end is earlier than maintenance_start in local time
+  // (P2 crosses midnight, e.g. 20:30 → 02:30 next day), push end forward 24h.
+  if(p2StartMs != null && p2EndMs != null && p2EndMs <= p2StartMs){
+    p2EndMs += 24*60*60*1000;
+  }
 
   // Helper: find VWC at a given time (with ±15min window). Returns {f, b}.
   function vwcAt(targetMs){
@@ -9915,12 +9937,17 @@ function _tr_analyzeTable(roomId, tnum, program, ev, hs){
   }
 
   // ── P0 overnight ──
-  // Last P2 peak: VWC right after the last P2 fire event yesterday.
-  // Morning low: lowest VWC between lights-off and today's lights-on.
+  // Last P2 peak: VWC right after the last automatic shot before today's
+  // lights-on. We DON'T strictly require p2EndMs — if cycle bounds are
+  // missing/invalid, fall back to "any auto event in the 24h before today's
+  // lights-on." This makes the overnight analysis robust to missing schedule
+  // data and to P2 windows that crossed midnight.
   let p0 = null;
-  if(ev[roomId] && ev[roomId][tnum] && p2EndMs){
+  if(ev[roomId] && ev[roomId][tnum]){
+    const upperBoundMs = Math.min(p2EndMs || Infinity, todayLightsOnUtc.getTime());
+    const lowerBoundMs = Math.max(yesterdayLightsOnUtc.getTime(), p2StartMs || 0);
     const lastP2 = ev[roomId][tnum]
-      .filter(e => !e.isManual && e.ts.getTime() >= (p2StartMs||0) && e.ts.getTime() <= p2EndMs)
+      .filter(e => !e.isManual && e.ts.getTime() >= lowerBoundMs && e.ts.getTime() <= upperBoundMs)
       .sort((a,b) => b.ts - a.ts)[0];
     if(lastP2){
       const peakMs = lastP2.ts.getTime() + 15*60*1000;
