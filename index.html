@@ -6064,6 +6064,99 @@ function ecForDay(fd){
   return EC_DAILY[fd] != null ? EC_DAILY[fd] : null;
 }
 
+// ════════════════════════════════════════════════════════════════
+// DIALED DESTINY TARGETS — per Resin OS v1.5 §3.A (DD 2.2) and §3.B (DD 2.5)
+// ════════════════════════════════════════════════════════════════
+// DD 2.2 (cadence-only rooms, standard 0.5 GPH drippers):
+//   P1/P2 model retired per v1.5. Single 45-min interval, event count
+//   19/20/21 is the sole steering variable. Plants climb to peak plateau
+//   during the day, hold ~69% at lights-off, then dryback overnight to
+//   54–57% morning VWC.
+//
+// DD 2.5 (PCND rooms, P1+P2 model):
+//   Three-tier control hierarchy: event count → window length → shot
+//   duration. Targets are phase-dependent (early flower runs different
+//   peaks and drybacks than stacking or expression).
+//
+// Mode detection: a program with maintenanceQuantity > 0 is DD 2.5
+// (P1+P2). A program with maintenanceQuantity == 0 or null is DD 2.2
+// (cadence-only). Mode is per-table from sheet data, NOT per-room — the
+// SOP says one room = one system but the dashboard reads programs at
+// the table level, which is more precise.
+const DD_TARGETS = {
+  // DD 2.2 cadence-mode targets (Hugo block, mid-to-late flower).
+  // Tolerance bands match SOP §22 decision guide.
+  cadence: {
+    peakVwcMin: 67, peakVwcMax: 71, peakVwcTarget: 69,
+    lightsOffVwc: 69,
+    morningVwcMin: 54, morningVwcMax: 57,
+    drybackMin: 10, drybackMax: 14,
+    // Off-band triggers from SOP §10 / §22:
+    morningVwcLowTrigger: 53,   // ≤ 52-53% → increase events
+    morningVwcHighTrigger: 58,  // ≥ 58-60% → reduce events
+    drybackHighTrigger: 14,     // > 14-15% → increase events
+    drybackLowTrigger: 9,       // < 8-9% → reduce events
+    // Baseline cadence
+    intervalMin: 45,
+    baselineEvents: 20,
+    minEvents: 19,
+    maxEvents: 21,
+  },
+  // DD 2.5 PCND phase-aware targets (per SOP §3.B Target Operating Zones).
+  // VWC daytime peak is 58-62% facility-wide; dryback varies by phase.
+  pcnd: {
+    peakVwcMin: 58, peakVwcMax: 62,
+    oscillationMin: 1.5, oscillationMax: 2.5,
+    // Phase-keyed dryback windows. Use ddPhaseForDay(fd) to pick.
+    phases: {
+      early:  { drybackMin: 10, drybackMax: 15, eventsMin: 14, eventsMax: 16, label: 'F1–E2' },
+      transition: { drybackMin: 12, drybackMax: 16, eventsMin: 16, eventsMax: 18, label: 'E3–S1' },
+      stacking: { drybackMin: 12, drybackMax: 18, eventsMin: 18, eventsMax: 22, label: 'S2–S3' },
+      expression: { drybackMin: 15, drybackMax: 20, eventsMin: 14, eventsMax: 18, label: 'X1–X2' },
+    },
+  },
+};
+
+// Map flower day to DD 2.5 phase bucket. Boundaries align with EC Rainbow
+// transitions: F1-E2 ends ~Day 22, transition through Day 35, stacking
+// 36-49, expression 50-63.
+function ddPhaseForDay(fd){
+  if(!fd || fd < 1) return 'early';
+  if(fd <= 22) return 'early';
+  if(fd <= 35) return 'transition';
+  if(fd <= 49) return 'stacking';
+  return 'expression';
+}
+
+// Mode detection: a program with no P2 maintenance phase is a cadence
+// room (DD 2.2). A program with maintenanceQuantity > 0 runs P1+P2 (DD 2.5).
+// Treat null/0/undefined identically — all three mean "no P2".
+function isCadenceMode(program){
+  if(!program) return false;
+  const mq = program.maintenanceQuantity;
+  return (mq == null || mq === 0);
+}
+
+// Compute the fire time of the Nth shot given a start time and interval.
+// Returns formatted "10:30 PM" / "12:00 AM" string for display.
+//   startTimeStr: "09:00:00" or "09:00"
+//   eventNumber: 1-based (event 1 fires at startTime, event N fires later)
+//   intervalMin: minutes between events (DD 2.2 = 45)
+function shotFireTime(startTimeStr, eventNumber, intervalMin){
+  if(!startTimeStr || !eventNumber || !intervalMin) return null;
+  const parts = String(startTimeStr).split(':').map(Number);
+  if(parts.length < 2 || isNaN(parts[0])) return null;
+  const startMin = parts[0]*60 + parts[1];
+  const fireMin = startMin + (eventNumber - 1) * intervalMin;
+  // Wrap into 24h if it crosses midnight, but track day rollover for display
+  const dayMin = fireMin % (24*60);
+  let h = Math.floor(dayMin / 60);
+  const m = dayMin % 60;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if(h === 0) h = 12;
+  return `${h}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
 // ══════════════════════════════════════════════
 // METRC DATA — CSV/XLSX IMPORT + VIEWER
 // ══════════════════════════════════════════════
@@ -9734,30 +9827,188 @@ function _tr_detectScheduleSanityIssues(p){
 // Render one table's analysis block: P1, P2, P0 with verdicts and recommendations.
 function _tr_renderTableBlock(a){
   const p = a.program;
-  const calibrationNote = p.onePercentShotSize
-    ? `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · ${p.onePercentShotSize}s of valve = 1% VWC`
-    : `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · (calibration unavailable)`;
+  const cadence = isCadenceMode(p);
+
+  // Mode-aware header. Cadence rooms (DD 2.2) don't have a P1 endpoint target
+  // or P2 dryback target — the whole day is one cadence climbing to peak then
+  // overnight dryback. P1+P2 rooms (DD 2.5) keep the existing three-target
+  // header so the calibration context is visible.
+  const headerTargets = cadence
+    ? `DD 2.2 cadence · ${p.quantity||'?'} events × ${p.rampUpShotInterval||45}min · peak ${DD_TARGETS.cadence.peakVwcTarget}% target · ${DD_TARGETS.cadence.morningVwcMin}–${DD_TARGETS.cadence.morningVwcMax}% morning · ${DD_TARGETS.cadence.drybackMin}–${DD_TARGETS.cadence.drybackMax}% dryback`
+    : `P1 ${p.rampUpTarget||'?'}% · P2 ${p.maintenanceDryback||'?'}% dryback · P0 ${p.overnightDrybackTarget||p.additionalDryback||'?'}% dryback`;
+  const calibrationNote = cadence
+    ? `DD 2.2 single-variable steering: event count only · interval and duration fixed per SOP`
+    : (p.onePercentShotSize
+        ? `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · ${p.onePercentShotSize}s of valve = 1% VWC`
+        : `Each P1 shot = ${p.rampUpShotSize||'?'}% VWC · (calibration unavailable)`);
   const headerLine = `<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-top:14px;margin-bottom:6px">
-    <div style="font-size:13px;font-weight:700">Table ${a.tableNum}</div>
-    <div style="font-size:10px;color:var(--text3);font-family:var(--mono)">P1 ${p.rampUpTarget||'?'}% · P2 ${p.maintenanceDryback||'?'}% dryback · P0 ${p.overnightDrybackTarget||p.additionalDryback||'?'}% dryback</div>
+    <div style="font-size:13px;font-weight:700">Table ${a.tableNum}${cadence ? ' <span style="font-size:10px;color:var(--text3);font-weight:500;letter-spacing:.06em">· CADENCE MODE</span>' : ''}</div>
+    <div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${headerTargets}</div>
   </div>
   <div style="font-size:10px;color:var(--text3);margin-bottom:8px;font-family:var(--mono)">${calibrationNote}</div>`;
 
   // Schedule sanity check — catches Growlink data-entry errors that look like
-  // "P1 ends at midnight, P2 fires at 1 AM" type mistakes
+  // "P1 ends at midnight, P2 fires at 1 AM" type mistakes. The sanity check
+  // is mode-aware internally (it skips P2 checks when P2 is intentionally absent).
   const sanityIssues = _tr_detectScheduleSanityIssues(p);
   const sanityBanner = sanityIssues.length ? `<div style="margin:0 0 8px;padding:10px 12px;background:rgba(245,158,11,0.10);border-left:3px solid var(--amber);border-radius:0 var(--r) var(--r) 0">
     <div style="font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--amber);text-transform:uppercase;margin-bottom:6px">⚠ Schedule looks misconfigured</div>
     ${sanityIssues.map(s => `<div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:4px">→ ${s}</div>`).join('')}
   </div>` : '';
 
+  // Cadence mode (DD 2.2): single block that grades peak + overnight dryback
+  // and recommends event-count changes per SOP §22 decision guide.
+  // P1+P2 mode (DD 2.5): keep the existing three-block layout.
+  const bodyBlocks = cadence
+    ? _tr_renderCadenceBlock(a)
+    : `${_tr_renderP1Block(a)}${_tr_renderP2Block(a)}${_tr_renderP0Block(a)}`;
+
   return `<div style="margin-bottom:8px">
     ${headerLine}
     ${sanityBanner}
-    ${_tr_renderP1Block(a)}
-    ${_tr_renderP2Block(a)}
-    ${_tr_renderP0Block(a)}
+    ${bodyBlocks}
   </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────
+// CADENCE-MODE RENDERER — DD 2.2 standard-dripper rooms
+// ────────────────────────────────────────────────────────────────
+// In cadence mode there is no P1/P2 split. The day is one continuous
+// cadence of N events at fixed interval that climbs to peak plateau and
+// then drybacks overnight. Two metrics are graded together:
+//   1. Peak VWC      → did the cadence reach the day's peak plateau?
+//   2. Overnight dryback → did the plant pull the SOP-spec dryback?
+// The morning low VWC is a consequence of those two — we display it
+// for context but don't grade it independently.
+//
+// Recommendation logic mirrors Resin OS v1.5 §3.A.7 / §3.A.12:
+//   - In band on BOTH metrics → hold
+//   - Morning low ≤ 53% OR dryback > 14% → +1 event (later last shot)
+//   - Morning low ≥ 58% OR dryback < 9%  → −1 event (earlier last shot)
+//   - Conflict (e.g. dryback in band, morning low out) → hold per
+//     operator guidance: dryback is the dominant metric; don't chase
+//     a VWC number the grower may have set intentionally.
+function _tr_renderCadenceBlock(a){
+  const p = a.program;
+  const t = DD_TARGETS.cadence;
+  const interval = p.rampUpShotInterval || t.intervalMin;
+  const quantity = p.quantity;
+  const startTime = p.rampStart || '09:00';
+
+  // Compute the current last-shot time (when event N fires).
+  const currentLastShot = (quantity && interval) ? shotFireTime(startTime, quantity, interval) : null;
+  const scheduleSummary = `${quantity||'?'} events @ ${interval}min · first ${p.rampStart||'?'} → last ${currentLastShot||p.rampEnd||'?'}`;
+
+  const lines = [];
+
+  // ── Peak VWC: from the existing P1 endpoint data, which in cadence mode
+  // is the VWC right after the last shot of the day — i.e. the day's peak.
+  const r1 = a.p1;
+  let avgPeak = null;
+  if(r1){
+    if(r1.fEnd != null && r1.bEnd != null) avgPeak = (r1.fEnd + r1.bEnd) / 2;
+    else if(r1.fEnd != null) avgPeak = r1.fEnd;
+    else if(r1.bEnd != null) avgPeak = r1.bEnd;
+  }
+
+  // ── Overnight dryback + morning low from P0 analysis.
+  const r0 = a.p0;
+  const morningLow = r0 ? r0.morningLow : null;
+  const lastPeakP0 = r0 ? r0.lastPeak : null;
+  const drybackPts = (lastPeakP0 != null && morningLow != null) ? (lastPeakP0 - morningLow) : null;
+
+  // No data at all → bail with info line
+  if(avgPeak == null && drybackPts == null){
+    lines.push({sev:'info', text:'No cadence data yet — sensor outage, first day, or no shots fired yesterday.'});
+    return _tr_phaseBlockShell('CADENCE · DD 2.2', scheduleSummary, 'Did yesterday\'s cadence land peak and dryback in band?', lines);
+  }
+
+  // Data line: show peak + morning low + dryback together
+  const peakStr = avgPeak != null ? `${avgPeak.toFixed(1)}%` : '—';
+  const peakStatus = avgPeak == null ? '' :
+    (avgPeak >= t.peakVwcMin && avgPeak <= t.peakVwcMax) ? '✓ in band' :
+    (avgPeak < t.peakVwcMin) ? `${(t.peakVwcMin - avgPeak).toFixed(1)}% under` :
+    `${(avgPeak - t.peakVwcMax).toFixed(1)}% over`;
+  const morningStr = morningLow != null ? `${morningLow.toFixed(1)}%` : '—';
+  const morningStatus = morningLow == null ? '' :
+    (morningLow >= t.morningVwcMin && morningLow <= t.morningVwcMax) ? '✓ in band' :
+    (morningLow < t.morningVwcMin) ? `${(t.morningVwcMin - morningLow).toFixed(1)}% under` :
+    `${(morningLow - t.morningVwcMax).toFixed(1)}% over`;
+  const drybackStr = drybackPts != null ? `${drybackPts.toFixed(1)}%` : '—';
+  const drybackStatus = drybackPts == null ? '' :
+    (drybackPts >= t.drybackMin && drybackPts <= t.drybackMax) ? '✓ in band' :
+    (drybackPts < t.drybackMin) ? `${(t.drybackMin - drybackPts).toFixed(1)}% shallow` :
+    `${(drybackPts - t.drybackMax).toFixed(1)}% deep`;
+
+  lines.push({sev:'data', text:`Peak <b>${peakStr}</b> ${peakStatus?'('+peakStatus+')':''} · Morning low <b>${morningStr}</b> ${morningStatus?'('+morningStatus+')':''} · Dryback <b>${drybackStr}</b> ${drybackStatus?'('+drybackStatus+')':''}`});
+  lines.push({sev:'info', text:`Targets per DD 2.2 §9: peak ${t.peakVwcMin}–${t.peakVwcMax}% · morning ${t.morningVwcMin}–${t.morningVwcMax}% · overnight dryback ${t.drybackMin}–${t.drybackMax}%`});
+
+  // ── Recommendation logic per SOP §22 ──
+  // We need BOTH metrics to make a recommendation. If overnight data is
+  // missing, fall back to peak-only commentary (no event change).
+  if(drybackPts == null || morningLow == null){
+    if(avgPeak != null){
+      if(avgPeak < t.peakVwcMin){
+        lines.push({sev:'info', text:`Peak landed under the ${t.peakVwcMin}–${t.peakVwcMax}% band. Watch tomorrow's overnight dryback before adjusting — DD 2.2 steering uses both signals together.`});
+      } else if(avgPeak > t.peakVwcMax){
+        lines.push({sev:'info', text:`Peak landed over the ${t.peakVwcMin}–${t.peakVwcMax}% band. Watch tomorrow's overnight dryback before adjusting — DD 2.2 steering uses both signals together.`});
+      } else {
+        lines.push({sev:'ok', text:`✓ Peak in band. Need tonight's dryback to complete the call.`});
+      }
+    }
+    return _tr_phaseBlockShell('CADENCE · DD 2.2', scheduleSummary, 'Did yesterday\'s cadence land peak and dryback in band?', lines);
+  }
+
+  // Both metrics present — apply SOP §22 decision tree.
+  const drybackInBand = drybackPts >= t.drybackMin && drybackPts <= t.drybackMax;
+  const morningInBand = morningLow >= t.morningVwcMin && morningLow <= t.morningVwcMax;
+
+  // Off-band triggers from SOP §10:
+  const triggerIncrease = (morningLow <= t.morningVwcLowTrigger) || (drybackPts > t.drybackHighTrigger);
+  const triggerDecrease = (morningLow >= t.morningVwcHighTrigger) || (drybackPts < t.drybackLowTrigger);
+
+  if(drybackInBand && morningInBand){
+    lines.push({sev:'ok', text:`✓ <b>Hold ${quantity||'current'} events</b>. Cadence is dialed — peak, morning low, and dryback all in band per DD 2.2.`});
+  } else if(triggerIncrease && !triggerDecrease){
+    // Add one shot — recommend a count and show where the new last shot would fire.
+    const newQty = quantity ? quantity + 1 : null;
+    const newLastShot = (newQty && interval) ? shotFireTime(startTime, newQty, interval) : null;
+    if(newQty != null && newQty > t.maxEvents){
+      // Already at the SOP ceiling. Surface it as data-quality / escalation instead.
+      lines.push({sev:'action', text:`Current cadence is already at ${quantity} events — SOP §13 caps at ${t.maxEvents}. Dryback is ${drybackPts.toFixed(1)}% (target ${t.drybackMin}–${t.drybackMax}%) and morning low is ${morningLow.toFixed(1)}% (target ${t.morningVwcMin}–${t.morningVwcMax}%). Escalate to Fertigation Lead — additional support beyond ${t.maxEvents} events is a CD-approved exception, not a cadence steering call.`});
+    } else if(newQty != null && newLastShot != null){
+      const reason = drybackPts > t.drybackHighTrigger
+        ? `overnight dryback ${drybackPts.toFixed(1)}% is over the ${t.drybackMax}% ceiling`
+        : `morning low ${morningLow.toFixed(1)}% is under the ${t.morningVwcMin}% floor`;
+      lines.push({sev:'action', text:`<b>Add one shot → ${newQty} events.</b> At the ${interval}-min cadence, the new shot fires at <b>${newLastShot}</b> (currently last shot at ${currentLastShot||'?'}). Trigger: ${reason}. Per SOP §8: later last shot reduces overnight dryback.`});
+    }
+  } else if(triggerDecrease && !triggerIncrease){
+    const newQty = quantity ? quantity - 1 : null;
+    const newLastShot = (newQty && interval) ? shotFireTime(startTime, newQty, interval) : null;
+    if(newQty != null && newQty < t.minEvents){
+      lines.push({sev:'action', text:`Current cadence is already at ${quantity} events — SOP §13 floor is ${t.minEvents}. Dryback is ${drybackPts.toFixed(1)}% (target ${t.drybackMin}–${t.drybackMax}%) and morning low is ${morningLow.toFixed(1)}% (target ${t.morningVwcMin}–${t.morningVwcMax}%). Escalate to Fertigation Lead — pulling below ${t.minEvents} events is a CD-approved exception.`});
+    } else if(newQty != null && newLastShot != null){
+      const reason = drybackPts < t.drybackLowTrigger
+        ? `overnight dryback ${drybackPts.toFixed(1)}% is under the ${t.drybackMin}% floor (root zone holding too much water)`
+        : `morning low ${morningLow.toFixed(1)}% is over the ${t.morningVwcMax}% ceiling`;
+      lines.push({sev:'action', text:`<b>Remove one shot → ${newQty} events.</b> At the ${interval}-min cadence, the last shot moves from ${currentLastShot||'?'} to <b>${newLastShot}</b>. Trigger: ${reason}. Per SOP §8: earlier last shot increases overnight dryback.`});
+    }
+  } else if(triggerIncrease && triggerDecrease){
+    // Conflicting signals — both directions triggered. Don't auto-adjust.
+    lines.push({sev:'info', text:`Conflicting signals: one metric reads "needs more support" and another reads "needs less." Per DD 2.2 §14: react to trends, not single points. Watch 2–3 days before changing cadence.`});
+  } else {
+    // One metric out of band but not past the SOP trigger threshold, OR
+    // dryback in band but morning low drifting (the "don't chase VWC alone" case).
+    if(drybackInBand && !morningInBand){
+      lines.push({sev:'ok', text:`✓ Dryback in band at ${drybackPts.toFixed(1)}%. Morning low is ${morningLow.toFixed(1)}% (band ${t.morningVwcMin}–${t.morningVwcMax}%) but hasn't crossed the SOP §10 trigger. Per operator guidance: dryback is the dominant signal — don't chase VWC alone. <b>Hold ${quantity||'current'} events.</b>`});
+    } else if(morningInBand && !drybackInBand){
+      lines.push({sev:'info', text:`Morning low in band at ${morningLow.toFixed(1)}%. Dryback is ${drybackPts.toFixed(1)}% (band ${t.drybackMin}–${t.drybackMax}%) but hasn't crossed the SOP §10 trigger. <b>Hold ${quantity||'current'} events</b> and watch tomorrow.`});
+    } else {
+      lines.push({sev:'info', text:`Both metrics drifting from center but neither has crossed the SOP §10 trigger thresholds. <b>Hold ${quantity||'current'} events</b> and watch 1–2 more days for a clear signal.`});
+    }
+  }
+
+  return _tr_phaseBlockShell('CADENCE · DD 2.2', scheduleSummary, 'Did yesterday\'s cadence land peak and dryback in band?', lines);
 }
 
 function _tr_renderP1Block(a){
