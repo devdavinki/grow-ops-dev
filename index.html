@@ -9528,9 +9528,9 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
   const info = [];
 
   tables.forEach(t => {
-    // Hydraulics: phantom shots (valve fires, no water lands)
-    if(t.phantomShotCount > 0){
-      hydraulics.push(`<b>Table ${t.tableNum}:</b> ${t.phantomShotCount} shot${t.phantomShotCount>1?'s':''} fired but didn't reach substrate. Check tank, line, valve, manifold.`);
+    // Hydraulics: shots are failing to maintain VWC (consecutive decline run)
+    if(t.failingRun >= 3){
+      hydraulics.push(`<b>Table ${t.tableNum}:</b> ${t.failingRun} shots in a row didn't hold VWC — substrate dropped ${t.failingDeclinePct.toFixed(1)}% during what should be maintenance shots. Water isn't landing. Check tank, line, valve, manifold.`);
     }
     // Hydraulics: F/B gap > 8% — physical, not a tuning fix
     if(t.morningF != null && t.morningB != null){
@@ -9542,7 +9542,7 @@ function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
     }
 
     // Adjustments — only generated if no hydraulics issue on this table
-    const tableHasHydraulics = (t.phantomShotCount > 0) ||
+    const tableHasHydraulics = (t.failingRun >= 3) ||
       (t.morningF != null && t.morningB != null && Math.abs(t.morningF - t.morningB) >= TUNING_GAP_ISSUE_PCT);
 
     if(!tableHasHydraulics){
@@ -9685,30 +9685,67 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
   const ovB = ovPct(bProbe);
   const ovAvg = (ovF!=null && ovB!=null) ? (ovF+ovB)/2 : (ovF!=null?ovF:ovB);
 
-  // Phantom-shot check for this table: look at last 24h of fire events
-  // For each event, check if VWC at event time vs +30 min later rose by < 0.4%
-  let phantom = 0;
+  // Failing-shot detection: a *run* of 3+ consecutive shots where VWC
+  // trends down despite firing means water isn't landing. A single flat
+  // shot during maintenance is normal — the shot is *supposed* to hold
+  // VWC steady, not raise it. Only flag when the trend is clearly
+  // declining across multiple shots.
+  //
+  // Method: for each fire event, take VWC ~15 min after fire (the
+  // equilibrated post-shot value). Walk the sequence and find the
+  // longest run of consecutive shots where the post-shot VWC keeps
+  // declining. If that run has 3+ shots AND total decline > 1.0%, flag.
+  let failingRun = 0;       // size of the worst run found
+  let failingDeclinePct = 0; // total decline across that run
   let manual = 0;
   const evList = (ev[roomId] && ev[roomId][tnum]) || [];
   const hsList = hs[roomId] || [];
   const cutoff = Date.now() - 24*60*60*1000;
-  evList.forEach(e => {
-    if(e.ts.getTime() < cutoff) return;
-    if(e.isManual) manual++;
-    // Find VWC at event time and +30 min, F or B (whichever has data)
-    const targetMs1 = e.ts.getTime();
-    const targetMs2 = targetMs1 + 30*60*1000;
-    let v1 = null, v2 = null;
+  const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
+
+  // Find post-shot VWC for each event (avg of F+B at +15min, fallback to either)
+  const recentEvents = evList.filter(e => e.ts.getTime() >= cutoff && !e.isManual);
+  manual = evList.filter(e => e.ts.getTime() >= cutoff && e.isManual).length;
+
+  const postShotVwc = []; // array aligned to recentEvents — post-shot VWC value or null
+  recentEvents.forEach(e => {
+    const targetMs = e.ts.getTime() + 15*60*1000;
+    let vF = null, vB = null;
     for(let i=0; i<hsList.length; i++){
       const t = hsList[i].ts.getTime();
-      const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
-      const v = (hsList[i][fk] != null ? hsList[i][fk] : hsList[i][bk]);
-      if(v == null) continue;
-      if(v1==null && t >= targetMs1 && t <= targetMs1 + 10*60*1000) v1 = v;
-      if(v2==null && t >= targetMs2 - 5*60*1000 && t <= targetMs2 + 10*60*1000) { v2 = v; break; }
+      if(t < targetMs - 5*60*1000) continue;
+      if(t > targetMs + 10*60*1000) break;
+      if(hsList[i][fk] != null && vF == null) vF = hsList[i][fk];
+      if(hsList[i][bk] != null && vB == null) vB = hsList[i][bk];
+      if(vF != null && vB != null) break;
     }
-    if(v1!=null && v2!=null && (v2 - v1) < 0.4) phantom++;
+    const v = (vF != null && vB != null) ? (vF+vB)/2 : (vF != null ? vF : vB);
+    postShotVwc.push(v);
   });
+
+  // Walk the sequence looking for the longest declining run.
+  // A "declining" shot = post-shot VWC < previous post-shot VWC by ANY amount.
+  // We require both a run length >= 3 AND a cumulative decline > 1.0%
+  // before flagging — that filters out normal noise.
+  let curRunStart = null;     // index in postShotVwc where the current run started
+  for(let i = 1; i < postShotVwc.length; i++){
+    const prev = postShotVwc[i-1], cur = postShotVwc[i];
+    if(prev == null || cur == null){
+      curRunStart = null;
+      continue;
+    }
+    if(cur < prev){
+      if(curRunStart == null) curRunStart = i - 1;
+      const runLen = i - curRunStart + 1;
+      const runDecline = postShotVwc[curRunStart] - cur;
+      if(runLen >= 3 && runDecline > 1.0 && (runLen > failingRun || runDecline > failingDeclinePct)){
+        failingRun = runLen;
+        failingDeclinePct = runDecline;
+      }
+    } else {
+      curRunStart = null;
+    }
+  }
 
   return {
     tableNum: tnum,
@@ -9717,7 +9754,8 @@ function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
     overnightDbF: ovF,
     overnightDbB: ovB,
     overnightDbAvg: ovAvg,
-    phantomShotCount: phantom,
+    failingRun: failingRun,                    // shot count in the worst declining run, 0 = no concern
+    failingDeclinePct: failingDeclinePct,      // total VWC decline across that run
     manualShotCount: manual,
     hasData: (mF!=null || mB!=null || ovF!=null || ovB!=null),
   };
