@@ -423,6 +423,7 @@ button { cursor: pointer; }
   <button class="nav-tab" onclick="showPage('supplies')" data-page="supplies" data-roles="lead,fertigator">Supplies</button>
   <button class="nav-tab" onclick="showPage('settings')" data-page="settings" data-roles="lead">Settings</button>
   <button class="nav-tab" onclick="showPage('blueprint')" data-page="blueprint" data-roles="lead">Blueprint</button>
+  <button class="nav-tab" onclick="showPage('tuning')" data-page="tuning" data-roles="lead">Tuning</button>
 </div>
 
 <!-- MAIN -->
@@ -864,6 +865,12 @@ button { cursor: pointer; }
     <div id="custom-tasks-editor" style="display:grid;gap:6px;margin-bottom:10px"></div>
     <button onclick="addCustomTask()" class="btn-primary" style="font-size:12px;padding:6px 14px;margin-bottom:24px">+ Add standing task</button>
 
+    <!-- FLOWER SCHEDULE EDITOR -->
+    <div class="section-title" style="margin-top:4px;margin-bottom:10px">Flower schedule</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Day-of-flower reminders that appear in the Today section of any room currently on that day. Use a single day (e.g. Day 14) for one-off events, or a range (e.g. Day 25–30) for windows like defol periods.</div>
+    <div id="flower-schedule-editor" style="display:grid;gap:6px;margin-bottom:10px"></div>
+    <button onclick="addFlowerScheduleEvent()" class="btn-primary" style="font-size:12px;padding:6px 14px;margin-bottom:24px">+ Add flower schedule event</button>
+
     <!-- METRC UPLOAD — lead only -->
     <div class="section-title" style="margin-top:28px;margin-bottom:10px">METRC data upload</div>
     <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Export from mo.metrc.com → Plants/Harvests tabs. Select all files at once — filenames are auto-detected.</div>
@@ -1167,6 +1174,21 @@ button { cursor: pointer; }
     </div>
   </div>
 
+<!-- ══ PAGE: TUNING — Daily VWC tuning report per flower room ══ -->
+  <div id="page-tuning" class="page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div>
+        <div class="section-title">Daily Tuning Report</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">Per-room shot duration & frequency recommendations · pulled from GL_History + GL_ProbeMetrics + GL_IrrigationSchedule + GL_IrrigationEvents</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button onclick="renderTuningReport(true)" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+        <span id="tuning-status" style="font-size:11px;color:var(--text3)"></span>
+      </div>
+    </div>
+    <div id="tuning-report-wrap"></div>
+  </div>
+
 <!-- LOGIN MODAL — visibility:visible !important overrides pre-login cascade -->
 
 <!-- ROOM DETAIL MODAL -->
@@ -1233,7 +1255,12 @@ function addDays(d,n){const r=new Date(d);r.setDate(r.getDate()+n);return r}
 function diffDays(a,b){return Math.round((b-a)/86400000)}
 function fmtShort(d){if(!d)return '—';return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
 function fmtFull(d){if(!d)return '—';return new Date(d).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})}
-function fmtTime(){return new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}
+// Format current time as "10:05 AM" in Kansas City local time. The explicit
+// timeZone option protects against devices with incorrect timezone settings
+// (e.g. a phone left on a different city's time after travel, or stuck on
+// UTC) — without this, fmtTime() would return whatever the device thinks is
+// "now," which may not match the operator's actual physical location.
+function fmtTime(){return new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Chicago'})}
 function isoToDate(s){if(!s)return null;const[y,m,d]=s.split('-').map(Number);const dt=new Date(y,m-1,d);dt.setHours(0,0,0,0);return dt}
 function dateToIso(d){return d.toISOString().split('T')[0]}
 function L(k,def){try{const v=localStorage.getItem(k);return v?JSON.parse(v):def}catch(e){return def}}
@@ -1936,7 +1963,7 @@ function getIpmRoom(id){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint'], roomView:'full'},
+  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
   defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
   fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','additive','checks','slack','metrc','supplies'], roomView:'basic'},
   cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
@@ -2198,6 +2225,29 @@ function renderRooms(){
       const dotCls=additive.tier2?'dot-amber':'dot-gray';
       taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${additive.name}<span class="sub">${additive.dose}${additive.tier2?' · Tier 2':''}</span></div></div>`);
     }
+    // Flower schedule events for today (lead-defined day-of-flower reminders).
+    // Visible to anyone who can see the room — these are operational reminders
+    // (defol windows, environment changes, irrigation tweaks) the whole crew
+    // benefits from. Renders as stacked card-style entries.
+    if(fd !== null && fd >= 1){
+      const matched = getFlowerScheduleForDay(fd);
+      matched.forEach(ev => {
+        const isRange = ev.dayEnd && ev.dayEnd !== ev.dayStart;
+        const dayLabel = isRange ? `Day ${ev.dayStart}–${ev.dayEnd}` : `Day ${ev.dayStart}`;
+        const safeLabel = String(ev.label||'').replace(/</g,'&lt;') || '(untitled)';
+        const safeNotes = String(ev.notes||'').replace(/</g,'&lt;');
+        taskList.push(`
+          <div class="task-item-sm" style="display:block;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;margin:4px 0">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:${safeNotes?'4px':'0'}">
+              <div style="font-size:12px;font-weight:700;color:var(--text)">${safeLabel}</div>
+              <div style="font-size:10px;color:var(--text3);font-family:var(--mono);flex-shrink:0">${dayLabel}</div>
+            </div>
+            ${safeNotes?`<div style="font-size:11px;color:var(--text2);line-height:1.4;white-space:pre-wrap">${safeNotes}</div>`:''}
+          </div>
+        `);
+      });
+    }
+
     // (No dark period stage anymore — Day 65 = late flower, Day 66 = harvest)
     if(stage==='harvest'&&(roomView==='full')) taskList.push(`<div class="task-item-sm"><span class="task-dot dot-red"></span><div class="task-text"><span class="alert-txt">Harvest day — authorize entry in #harvest</span></div></div>`);
     if(taskList.length) taskHTML=`<div class="task-strip"><div class="task-strip-head">Today</div>${taskList.join('')}</div>`;
@@ -3158,7 +3208,7 @@ function editCloneSession(idx){
   cloneSessions[idx]={...s,count:parseInt(newCount)||s.count,strain:newStrain.trim()||s.strain,note:newNote};
   S(getWeekKey(),cloneSessions);
   renderCloneTracker();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
 }
 
 // ══════════════════════════════════════════════
@@ -4565,7 +4615,12 @@ function toggleRolePerm(role,page,enabled){
   }
   S('wg_role_perms',rolePerms);
   applyRolePerms();
-  pushConfigDebounced();
+  // Mark this device as the one that edited rolePerms so its push is the only
+  // one that includes rolePerms in the payload — prevents stale rolePerms on
+  // other devices (e.g. Zec's phone) from clobbering cloud after the lead's
+  // toggle pushes through.
+  sessionStorage.setItem('wg_role_perms_dirty','1');
+  pushConfigToCloud(true); // immediate, not debounced
   // re-apply nav visibility for current role
   setRole(currentRole);
 }
@@ -4646,10 +4701,45 @@ function finishLogin(member){
                 : (perms.pages && perms.pages[0])   ? perms.pages[0]
                                                     : 'assignments';
   showPage(landing);
+  // Start the background config poll. Pulls cloud config every 60 seconds so
+  // edits made on other devices (room dates, IPM rules, trim queue, supplies,
+  // permissions, etc.) propagate to this device without requiring manual
+  // refresh. Push side is already real-time via dirty-flag immediate pushes;
+  // this closes the loop on the receiving side.
+  startBackgroundConfigPoll();
 }
+
+let _bgConfigPollTimer = null;
+const BG_POLL_INTERVAL_MS = 60 * 1000;
+
+function startBackgroundConfigPoll(){
+  if(_bgConfigPollTimer) return; // already running
+  _bgConfigPollTimer = setInterval(() => {
+    // Don't poll if tab is hidden (saves API quota when nobody's looking)
+    if(document.hidden) return;
+    if(!loggedInMember || !gsUrl) return;
+    pullConfigFromCloud(true).catch(()=>{});
+  }, BG_POLL_INTERVAL_MS);
+}
+
+function stopBackgroundConfigPoll(){
+  if(_bgConfigPollTimer){
+    clearInterval(_bgConfigPollTimer);
+    _bgConfigPollTimer = null;
+  }
+}
+
+// When the tab becomes visible after being hidden, do an immediate pull so the
+// user doesn't have to wait up to 60 seconds to see fresh data on tab switch.
+document.addEventListener('visibilitychange', () => {
+  if(!document.hidden && loggedInMember && gsUrl){
+    pullConfigFromCloud(true).catch(()=>{});
+  }
+});
 
 function switchUser(){
   loggedInMember=null;
+  stopBackgroundConfigPoll();
   localStorage.removeItem('wg_session');
   document.body.classList.add('pre-login');
   const roleSelect=document.getElementById('role-select');
@@ -4689,6 +4779,7 @@ function renderSettings(){
 
   renderChoresEditor();
   renderCustomTasksEditor();
+  renderFlowerScheduleEditor();
   updateMetrcSyncLabel();
 
   const grid=document.getElementById('settings-grid');
@@ -4805,6 +4896,8 @@ function confirmTrimItem(){
     trimQueue.splice(insertAt,0,item);
   }
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   closeTrimModal();
   renderTrimQueue();
 }
@@ -4813,17 +4906,23 @@ function markTrimDone(id){
   const item=trimQueue.find(i=>i.id===id);
   if(item)item.status='done';
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   renderTrimQueue();
 }
 function markTrimInProgress(id){
   const item=trimQueue.find(i=>i.id===id);
   if(item)item.status='trimming';
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   renderTrimQueue();
 }
 function removeTrimItem(id){
   trimQueue=trimQueue.filter(i=>i.id!==id);
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   renderTrimQueue();
 }
 function moveTrimItem(id,dir){
@@ -4833,6 +4932,8 @@ function moveTrimItem(id,dir){
   if(swap<0||swap>=trimQueue.length)return;
   [trimQueue[idx],trimQueue[swap]]=[trimQueue[swap],trimQueue[idx]];
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   renderTrimQueue();
   pushMetrcToCloud();
   // Keep METRC harvests tab in sync if visible
@@ -4853,6 +4954,8 @@ function updateTrimItemPriority(id, priority) {
     }
     // Don't re-sort — preserve manual ordering set by leads
     S('wg_trim_queue', trimQueue);
+    sessionStorage.setItem('wg_trim_queue_dirty','1');
+    pushConfigToCloud(true);
   }
   renderTrimQueue();
   pushMetrcToCloud();
@@ -4865,6 +4968,8 @@ function toggleMachineTrimmed(id){
   item.machineTrimmedBy=item.machineTrimmed?(loggedInMember?loggedInMember.name:'Unknown'):'';
   item.machineTrimmedAt=item.machineTrimmed?fmtTime():'';
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   renderTrimQueue();
   pushMetrcToCloud();
 }
@@ -5214,7 +5319,8 @@ function editPrerollEntry(id){
       pushWeightsToCloud();
     }
     S('wg_trim_queue',trimQueue);
-    pushConfigDebounced();
+    sessionStorage.setItem('wg_trim_queue_dirty','1');
+    pushConfigToCloud(true);
   }
   // Switch to the trim queue tab and scroll to the strain card.
   showPostTab('queue',document.querySelectorAll('#page-postprod .nav-tab')[0]);
@@ -5301,6 +5407,7 @@ function showPage(page){
   if(page==='rooms'){renderRooms();pullGrowlinkFromCloud(true);pullRoomChecksFromCloud(true).then(()=>renderRooms()).catch(()=>{});startManualRefresh();}else{stopManualRefresh();}
   if(page==='daily-review'){renderDailyReview();}
   if(page==='blueprint'){renderBlueprint();}
+  if(page==='tuning'){renderTuningReport(false);}
   if(page==='supplies'){renderSupplies();}
   if(page==='settings'){ try{ populateCsvRoomSelect(); }catch(e){} }
   if(page==='clonetracker'){
@@ -5373,7 +5480,7 @@ function saveGsUrl(val){
   const st=document.getElementById('gs-url-status');
   if(st){st.textContent='Saved ✓';st.style.color='var(--green)';}
   // Push to cloud so other devices can pull this URL
-  pushConfigDebounced();
+  pushConfigToCloud(true);
 }
 // Push the current gsUrl (and full config) to the cloud immediately, bypassing
 // the 2-second debounce. Use this when you've just changed the URL and want
@@ -5516,7 +5623,17 @@ async function pullMetrcFromCloud(silent=false){
     if(d.flowering &&shouldUse(d.flowering, metrcData.flowering)) { metrcData.flowering=d.flowering; S(METRC_KEYS.flowering,d.flowering); }
     if(d.harvests  &&shouldUse(d.harvests,  metrcData.harvests))  { metrcData.harvests=d.harvests;   S(METRC_KEYS.harvests,d.harvests); }
     if(d.harvestPriority){ metrcHarvestPriority=d.harvestPriority;S(METRC_KEYS.harvestPriority,d.harvestPriority); }
-    if(d.trimQueue&&d.trimQueue.length){ S('wg_trim_queue',d.trimQueue); }
+    if(d.trimQueue&&d.trimQueue.length){
+      // Merge by id — cloud wins for matching items, local-only items preserved.
+      // Prevents a cloud wipe (or a stale METRC sync from another device) from
+      // erasing local trim queue edits.
+      const local=L('wg_trim_queue',[]);
+      const cloudIds=new Set(d.trimQueue.map(t=>t.id));
+      const localOnly=local.filter(t=>!cloudIds.has(t.id));
+      const merged=[...d.trimQueue,...localOnly];
+      S('wg_trim_queue',merged);
+      trimQueue=merged;
+    }
     else if(d.harvests&&d.harvests.length){ syncHarvestsToTrimQueue(d.harvests); }
     const syncInfo={};
     ['mother','immature','vegetative','flowering','harvests'].forEach(k=>{
@@ -5629,21 +5746,25 @@ async function pullRoomChecksFromCloud(silent=false){
     //   0:Date 1:Time 2:Room 3:RH 4:RoomTemp 5:LeafTemp 6:Dewpoint 7:PPFD
     //   8:TableLabel 9:FrontVol 10:FrontEC 11:FrontPH 12:BackVol 13:BackEC 14:BackPH
 
+    // Convert a sheet's time value to "10:05 AM" in Kansas City local time.
+    // The sheet might give us:
+    //   - A string like "10:05 AM" (in-dashboard form path) — pass through
+    //   - An ISO string like "1899-12-30T15:05:00.000Z" (Sheets time serial) — convert from UTC
+    //   - A Date object — convert via toLocaleTimeString with explicit timezone
+    // All paths normalize to Kansas City local time so display matches what
+    // the form operator actually saw on their phone.
     const fmtTime = isoTime => {
-      // isoTime is like "1899-12-30T21:37:00.000Z" — extract HH:MM in local
-      if(!isoTime || typeof isoTime !== 'string') return isoTime||'';
-      const m = isoTime.match(/T(\d{2}):(\d{2})/);
-      if(!m) return isoTime;
-      // Convert UTC hours to local (subtract UTC offset in hours)
-      let h = parseInt(m[1]), mn = parseInt(m[2]);
-      // Sheets time serials are UTC — convert to local
-      const offset = new Date().getTimezoneOffset(); // minutes behind UTC (positive = behind)
-      const totalMin = h*60 + mn - offset;
-      const lh = ((Math.floor(totalMin/60)) % 24 + 24) % 24;
-      const lm = ((totalMin % 60) + 60) % 60;
-      const ampm = lh >= 12 ? 'PM' : 'AM';
-      const dh = lh % 12 || 12;
-      return dh + ':' + String(lm).padStart(2,'0') + ' ' + ampm;
+      if(!isoTime) return '';
+      // Already a formatted string like "10:05 AM" — pass through
+      if(typeof isoTime === 'string' && /\d{1,2}:\d{2}\s*(AM|PM)/i.test(isoTime)){
+        return isoTime;
+      }
+      // Try parsing as a Date — covers both ISO strings and Date objects
+      const d = (isoTime instanceof Date) ? isoTime : new Date(isoTime);
+      if(d && !isNaN(d.getTime())){
+        return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Chicago'});
+      }
+      return String(isoTime);
     };
 
     const todaySubs = [];
@@ -5724,7 +5845,7 @@ function submitWeightForVerification(itemId){
   trimWeights[itemId].approvedAt='';
   S('wg_trim_weights',trimWeights);
   pushWeightsToCloud();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderTrimQueue();
   // Notify #postprod Slack — lead is the approver now
   const wh=webhooks['postprod'];
@@ -5749,9 +5870,10 @@ function approveWeight(itemId){
     item.archived=true;
     item.archivedAt=new Date().toISOString();
     S('wg_trim_queue',trimQueue);
+    sessionStorage.setItem('wg_trim_queue_dirty','1');
   }
   pushWeightsToCloud();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   // Append to Weight_Log sheet (single-line ledger, METRC-ready format)
   if(item){
     postToSheet('Weight_Log',[item.strain,item.harvestDate||'',w.bigBuds||'',w.smallBuds||'',
@@ -5770,7 +5892,7 @@ function rejectWeight(itemId){
   trimWeights[itemId].submittedAt='';
   S('wg_trim_weights',trimWeights);
   pushWeightsToCloud();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderTrimQueue();
 }
 
@@ -6546,6 +6668,8 @@ function moveHarvestItem(idx, dir, btn){
     return ia-ib;
   });
   S('wg_trim_queue',trimQueue);
+  sessionStorage.setItem('wg_trim_queue_dirty','1');
+  pushConfigToCloud(true);
   // Re-render both to get correct numbering and button states
   renderMetrcHarvests();
   renderTrimQueue();
@@ -6556,7 +6680,12 @@ function setHarvestPriority(batch,priority){
   // Also update trim queue item priority
   trimQueue=L('wg_trim_queue',[]);
   const qi=trimQueue.find(q=>q.harvestBatch===batch||q.strain===batch);
-  if(qi){qi.priority=priority;S('wg_trim_queue',trimQueue);}
+  if(qi){
+    qi.priority=priority;
+    S('wg_trim_queue',trimQueue);
+    sessionStorage.setItem('wg_trim_queue_dirty','1');
+    pushConfigToCloud(true);
+  }
   renderMetrcHarvests();
 }
 
@@ -6710,7 +6839,7 @@ function updateChore(i, field, val) {
   chores[i][field] = val;
   S('wg_custom_chores', chores);
   renderChores();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
 }
 
 function removeChore(i) {
@@ -6718,7 +6847,7 @@ function removeChore(i) {
   chores.splice(i, 1);
   S('wg_custom_chores', chores);
   renderChoresEditor();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderChores();
 }
 
@@ -6762,13 +6891,101 @@ function removeCustomTask(i) {
   customTasks.splice(i, 1);
   S('wg_custom_tasks', customTasks);
   renderCustomTasksEditor();
-  pushConfigDebounced();
+  pushConfigToCloud(true);
 }
 
 function addCustomTask() {
   customTasks.push({ id: 'ct_'+Date.now(), name: 'New task', desc: '', role: 'lead' });
   S('wg_custom_tasks', customTasks);
   renderCustomTasksEditor();
+}
+
+// ══════════════════════════════════════════════
+// FLOWER SCHEDULE EDITOR
+// Flower-day-keyed reminders that surface in the Today section of any room
+// currently on the matching flower day. Single day or range supported.
+// Schema: { id, dayStart, dayEnd, label, notes }
+// dayStart === dayEnd → single day. dayEnd > dayStart → window/range.
+// ══════════════════════════════════════════════
+let flowerSchedule = L('wg_flower_schedule', []);
+
+function renderFlowerScheduleEditor(){
+  const wrap = document.getElementById('flower-schedule-editor');
+  if(!wrap) return;
+  if(!flowerSchedule.length){
+    wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">No flower schedule events yet. Add reminders for specific flower days or windows.</div>';
+    return;
+  }
+  // Sort by dayStart ascending so the editor reads in chronological order
+  const sorted = [...flowerSchedule].sort((a,b)=>(a.dayStart||0)-(b.dayStart||0));
+  wrap.innerHTML = sorted.map(ev => {
+    const i = flowerSchedule.findIndex(e=>e.id===ev.id);
+    const isRange = ev.dayEnd && ev.dayEnd !== ev.dayStart;
+    return `
+    <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+        <span style="font-size:10px;color:var(--text3);font-weight:600">DAY</span>
+        <input type="number" min="1" max="80" value="${ev.dayStart||''}" placeholder="Start"
+          style="width:60px;font-size:12px;padding:4px 6px;text-align:center"
+          onchange="updateFlowerScheduleEvent(${i},'dayStart',parseInt(this.value)||null)"/>
+        <span style="font-size:11px;color:var(--text3)">–</span>
+        <input type="number" min="1" max="80" value="${isRange?ev.dayEnd:''}" placeholder="End"
+          title="Leave blank for a single day"
+          style="width:60px;font-size:12px;padding:4px 6px;text-align:center"
+          onchange="updateFlowerScheduleEvent(${i},'dayEnd',parseInt(this.value)||null)"/>
+      </div>
+      <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:4px">
+        <input value="${(ev.label||'').replace(/"/g,'&quot;')}" placeholder="Event label (e.g. Light defol window)"
+          style="width:100%;font-size:13px;padding:5px 8px;font-weight:600"
+          onchange="updateFlowerScheduleEvent(${i},'label',this.value)"/>
+        <textarea placeholder="Notes (irrigation, environment, IPM, anything to remember on this day)" rows="2"
+          style="width:100%;font-size:12px;padding:6px 8px;font-family:inherit;resize:vertical"
+          onchange="updateFlowerScheduleEvent(${i},'notes',this.value)">${(ev.notes||'').replace(/</g,'&lt;')}</textarea>
+      </div>
+      <button onclick="removeFlowerScheduleEvent('${ev.id}')" title="Remove this event"
+        style="font-size:11px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer;flex-shrink:0;align-self:flex-start">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function updateFlowerScheduleEvent(i, field, val){
+  if(!flowerSchedule[i]) return;
+  flowerSchedule[i][field] = val;
+  S('wg_flower_schedule', flowerSchedule);
+  sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  pushConfigToCloud(true);
+  renderRooms(); // surface change immediately on cards
+}
+
+function addFlowerScheduleEvent(){
+  flowerSchedule.push({ id:'fs_'+Date.now(), dayStart:1, dayEnd:null, label:'', notes:'' });
+  S('wg_flower_schedule', flowerSchedule);
+  sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  pushConfigToCloud(true);
+  renderFlowerScheduleEditor();
+}
+
+function removeFlowerScheduleEvent(id){
+  if(!confirm('Remove this flower schedule event?')) return;
+  flowerSchedule = flowerSchedule.filter(e=>e.id!==id);
+  S('wg_flower_schedule', flowerSchedule);
+  sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  pushConfigToCloud(true);
+  renderFlowerScheduleEditor();
+  renderRooms();
+}
+
+// Returns array of flower schedule events that match the given flower day.
+// A single-day event matches when dayStart === fd. A range event matches
+// when fd is within [dayStart, dayEnd] inclusive.
+function getFlowerScheduleForDay(fd){
+  if(fd === null || fd === undefined) return [];
+  return flowerSchedule.filter(ev => {
+    const start = parseInt(ev.dayStart);
+    if(isNaN(start)) return false;
+    const end = ev.dayEnd != null ? parseInt(ev.dayEnd) : start;
+    return fd >= start && fd <= end;
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -8510,7 +8727,7 @@ function addCalendarRule(){
   if(!label){ alert('Add a label for what happens that day'); return; }
   calendarRules.push({ id: 'rule_'+Date.now(), dayOfFlower: day, label: label });
   S('wg_cal_rules', calendarRules);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   dayInp.value = '';
   labelInp.value = '';
   renderCalendar();
@@ -8520,7 +8737,7 @@ function deleteCalendarRule(id){
   if(!confirm('Remove this recurring reminder?')) return;
   calendarRules = calendarRules.filter(r => r.id !== id);
   S('wg_cal_rules', calendarRules);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderCalendar();
 }
 
@@ -8533,7 +8750,7 @@ function addCalendarEvent(){
   if(!label){ alert('Add a title for the event'); return; }
   calendarEvents.push({ id: 'evt_'+Date.now(), date: date, label: label });
   S('wg_cal_events', calendarEvents);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   dateInp.value = '';
   labelInp.value = '';
   renderCalendar();
@@ -8543,7 +8760,7 @@ function deleteCalendarEvent(id){
   if(!confirm('Remove this event?')) return;
   calendarEvents = calendarEvents.filter(e => e.id !== id);
   S('wg_cal_events', calendarEvents);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderCalendar();
 }
 
@@ -8625,7 +8842,7 @@ function confirmSupply() {
     supplies.unshift(item);
   }
   S('wg_supplies', supplies);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
 
   // Post to sheet
   postToSheet('Supply_Log', [
@@ -8641,7 +8858,7 @@ function deleteSupply(id) {
   if (!confirm('Remove this supply entry?')) return;
   supplies = supplies.filter(s => s.id !== id);
   S('wg_supplies', supplies);
-  pushConfigDebounced();
+  pushConfigToCloud(true);
   renderSupplies();
 }
 
@@ -8767,17 +8984,21 @@ async function pushConfigToCloud(silent=false){
   // logging supplies pushing back stale flipDates).
   const _roomsDirty    = sessionStorage.getItem('wg_rooms_dirty')==='1';
   const _teamDirty     = sessionStorage.getItem('wg_team_dirty')==='1';
+  const _rolePermsDirty= sessionStorage.getItem('wg_role_perms_dirty')==='1';
   const _ipmRulesDirty = sessionStorage.getItem('wg_ipm_rules_dirty')==='1';
   const _ipmLogDirty   = sessionStorage.getItem('wg_ipm_log_dirty')==='1';
+  const _flowerScheduleDirty = sessionStorage.getItem('wg_flower_schedule_dirty')==='1';
+  const _trimQueueDirty= sessionStorage.getItem('wg_trim_queue_dirty')==='1';
   const payload={
     action:'setConfig',
     data:{
       ...(_roomsDirty ? {rooms} : {}),
       ...(_teamDirty  ? {team}  : {}),
-      rolePerms,
+      ...(_rolePermsDirty ? {rolePerms} : {}),
       gsUrl,
       ...(_ipmRulesDirty ? {ipmRules: L('wg_ipm_rules',[])} : {}),
       ...(_ipmLogDirty   ? {ipmLog:   L('wg_ipm_log',[])}   : {}),
+      ...(_flowerScheduleDirty ? {flowerSchedule: L('wg_flower_schedule',[])} : {}),
       customChores:L('wg_custom_chores',null),
       customTasks:L('wg_custom_tasks',[]),
       supplies:L('wg_supplies',[]),
@@ -8787,7 +9008,7 @@ async function pushConfigToCloud(silent=false){
       roomOverridesByDay,
       dryRooms,
       alertThresholds,
-      trimQueue:L('wg_trim_queue',[]),
+      ...(_trimQueueDirty ? {trimQueue:L('wg_trim_queue',[])} : {}),
       approvedTakedowns:L('wg_approved_takedowns',{}),
       calendarRules:L('wg_cal_rules',[]),
       calendarEvents:L('wg_cal_events',[]),
@@ -8802,8 +9023,11 @@ async function pushConfigToCloud(silent=false){
     // Clear dirty flags now that the changes are uploaded
     if(_roomsDirty)    sessionStorage.removeItem('wg_rooms_dirty');
     if(_teamDirty)     sessionStorage.removeItem('wg_team_dirty');
+    if(_rolePermsDirty)sessionStorage.removeItem('wg_role_perms_dirty');
     if(_ipmRulesDirty) sessionStorage.removeItem('wg_ipm_rules_dirty');
     if(_ipmLogDirty)   sessionStorage.removeItem('wg_ipm_log_dirty');
+    if(_flowerScheduleDirty) sessionStorage.removeItem('wg_flower_schedule_dirty');
+    if(_trimQueueDirty)sessionStorage.removeItem('wg_trim_queue_dirty');
   }catch(e){ if(!silent) console.warn('[Config] Push failed:',e); }
 }
 
@@ -8912,6 +9136,16 @@ async function pullConfigFromCloud(silent=false){
     if(d.calendarEvents&&Array.isArray(d.calendarEvents)){
       calendarEvents = d.calendarEvents;
       S('wg_cal_events', calendarEvents);
+    }
+    if(d.flowerSchedule&&Array.isArray(d.flowerSchedule)){
+      // Cloud is authoritative for flower schedule. Dirty-flag push protects
+      // against stale-device clobbers.
+      flowerSchedule = d.flowerSchedule;
+      S('wg_flower_schedule', flowerSchedule);
+      // If Settings is currently open, refresh the editor so changes appear
+      if(typeof renderFlowerScheduleEditor==='function' && document.getElementById('flower-schedule-editor')){
+        renderFlowerScheduleEditor();
+      }
     }
     if(d.ipmRules&&Array.isArray(d.ipmRules)){
       // Cloud is authoritative for the rules list. The "skip-empty push" guard in
@@ -9034,6 +9268,512 @@ function saveAlertLog(log){ S(ALERT_LOG_KEY, log); }
 // ══════════════════════════════════════════════
 // BLUEPRINT PAGE
 // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════
+// DAILY TUNING REPORT
+// Per-room VWC tuning recommendations comparing yesterday's morning VWC,
+// post-P1 peak, and overnight dryback against phase blueprint targets.
+//
+// Reads:
+//   - GL_ProbeMetrics  (today's per-probe peak/low/dryback values)
+//   - GL_IrrigationSchedule  (active Rhythm cycles per room/table)
+//   - GL_IrrigationEvents    (actual valve fire log, for phantom-shot check)
+//   - MAXX_PHASES + room cycleDay  (blueprint targets per phase)
+//
+// Outputs: per-room cards with target band, per-table snapshot,
+// 1-3 tuning recommendations (duration + frequency together) with
+// one-line "why" for each.
+//
+// Logic:
+//   1. Phase target: 65% (VEG/F1-F3), 62% (E1-S1), 60% (S2-S3), 57% (X1), 53% (X2A+)
+//   2. Tuning fires when |actual - target| >= 2% (moderate aggressiveness)
+//   3. Front/back gap priority:
+//        a) Always flag the gap with its size
+//        b) Recommend based on the WORSE (drier) side so plants don't suffer
+//        c) If gap >8% for 3+ days  → escalate as hydraulics issue (DD 2.2)
+//        d) Average-based fallback when gap small (≤2%)
+//   4. Phantom-shot check: cycle scheduled but no VWC rise → flag, don't tune
+// ══════════════════════════════════════════════════════════════════
+
+// Morning VWC target per phase ID — biased toward 62% in mid-flower
+const TUNING_VWC_TARGETS = {
+  'VEG':65, 'F1':65, 'F2':65, 'F3':65,
+  'E1':62, 'E2':62, 'E3':62, 'E4':62, 'S1':62,
+  'S2':60, 'S3':60,
+  'X1':57,
+  'X2A':53, 'X2B':53, 'X3':53,
+};
+function getTuningVwcTarget(phaseId){
+  return TUNING_VWC_TARGETS[phaseId] != null ? TUNING_VWC_TARGETS[phaseId] : 62;
+}
+
+// Moderate tuning thresholds
+const TUNING_VWC_DEADBAND_PCT = 2.0;   // don't tune within ±2% of target
+const TUNING_GAP_WATCH_PCT    = 5.0;   // 5-8% front/back gap = watch
+const TUNING_GAP_ISSUE_PCT    = 8.0;   // >8% = hydraulics issue
+const TUNING_DRYBACK_TOL_PCT  = 2.0;   // tolerate ±2% off blueprint dryback
+
+async function renderTuningReport(force){
+  const wrap   = document.getElementById('tuning-report-wrap');
+  const status = document.getElementById('tuning-status');
+  if(!wrap) return;
+  if(status) status.textContent = 'Loading…';
+  wrap.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text3);font-size:13px">Pulling sheets…</div>';
+
+  // Pull the four sheets in parallel
+  const sinceISO = new Date(Date.now() - 49*60*60*1000).toISOString();
+  let pmRows, schRows, evRows, hsRows;
+  try {
+    const [pm, sch, ev, hs] = await Promise.all([
+      fetch(gsUrl+'?action=getSheet&sheet=GL_ProbeMetrics&t='+Date.now()).then(r=>r.json()),
+      fetch(gsUrl+'?action=getSheet&sheet=GL_IrrigationSchedule&t='+Date.now()).then(r=>r.json()),
+      fetch(gsUrl+'?action=getSheet&sheet=GL_IrrigationEvents&since='+encodeURIComponent(sinceISO)).then(r=>r.json()),
+      fetch(gsUrl+'?action=getSheet&sheet=GL_History&since='+encodeURIComponent(sinceISO)).then(r=>r.json()),
+    ]);
+    if(!pm.ok || !sch.ok || !ev.ok || !hs.ok){
+      wrap.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--red)">One or more sheets failed to load. Check Apps Script logs.</div>';
+      if(status) status.textContent = 'Error';
+      return;
+    }
+    pmRows  = pm.rows  || [];
+    schRows = sch.rows || [];
+    evRows  = ev.rows  || [];
+    hsRows  = hs.rows  || [];
+  } catch(e){
+    wrap.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--red)">Fetch error: '+e.message+'</div>';
+    if(status) status.textContent = 'Error';
+    return;
+  }
+
+  // Parse probe metrics into pm[roomId][probe] = {ovPts, yPeak, mLow, mLowT, dayPeakVwc, ...}
+  const pm = _tr_parseProbeMetrics(pmRows);
+  // Parse schedule into sch[roomId] = [{table, sensorName, rampStart, rampEnd, frequency, duration, quantity, programId, isActive}]
+  const sch = _tr_parseSchedule(schRows);
+  // Parse irrigation events grouped by room+table
+  const ev  = _tr_parseEvents(evRows);
+  // Parse VWC history per room+table for the last 24h (for phantom-shot/post-shot peak detection)
+  const hs  = _tr_parseHistory(hsRows);
+
+  // Build report per active flower room
+  const reportRooms = [];
+  rooms.forEach(room => {
+    if(!room.id || !room.flipDate) return; // need flip date to compute phase day
+    const flipMs = new Date(room.flipDate).getTime();
+    if(isNaN(flipMs)) return;
+    const cycleDay = Math.floor((Date.now() - flipMs)/86400000) + 1;
+    const phase = (typeof getPhaseForDay === 'function') ? getPhaseForDay(cycleDay) : null;
+    if(!phase) return;
+    // Skip rooms with no Growlink data at all
+    if(!pm[room.id] && !sch[room.id]) return;
+    reportRooms.push({ room, cycleDay, phase });
+  });
+
+  if(!reportRooms.length){
+    wrap.innerHTML = '<div class="card" style="text-align:center;padding:32px;color:var(--text3)">No active flower rooms with phase data. Make sure flip dates are set and Growlink data has been pulled.</div>';
+    if(status) status.textContent = '';
+    return;
+  }
+
+  // Sort by cycleDay descending (later stages first — they matter more)
+  reportRooms.sort((a,b) => b.cycleDay - a.cycleDay);
+
+  // Render
+  const html = reportRooms.map(({room, cycleDay, phase}) => _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs)).join('');
+  wrap.innerHTML = '<div style="display:grid;gap:12px">'+html+'</div>';
+  if(status){
+    const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    status.textContent = 'Updated '+ts;
+  }
+}
+
+// ── Parse helpers ─────────────────────────────────────────────────
+function _tr_parseProbeMetrics(rows){
+  // Returns pm[roomId][probe] = { ovPts, yPeak, yPeakT, mLow, mLowT, dayPeakVwc, dayPeakTime, dayLowVwc, overnightDb, noProg }
+  if(!rows || rows.length<2) return {};
+  const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
+  const col = n => hdr.indexOf(n);
+  const today = new Date().toISOString().split('T')[0];
+  const out = {};
+  rows.slice(1).forEach(row=>{
+    const d = String(row[col('date')]||'').split('T')[0];
+    if(d !== today) return;
+    const rid = String(row[col('room_id')]||'');
+    const probe = String(row[col('probe')]||'');
+    if(!rid || !probe) return;
+    if(!out[rid]) out[rid] = {};
+    const grab = (cName, existing) => {
+      const i = col(cName);
+      if(i<0) return existing;
+      const v = row[i];
+      if(v==='' || v==null) return existing;
+      return v;
+    };
+    const prev = out[rid][probe] || {};
+    out[rid][probe] = {
+      dayPeakVwc:  grab('day_peak_vwc',         prev.dayPeakVwc),
+      dayPeakTime: grab('day_peak_time',        prev.dayPeakTime),
+      dayLowVwc:   grab('day_low_vwc',          prev.dayLowVwc),
+      dayLowTime:  grab('day_low_time',         prev.dayLowTime),
+      overnightDb: grab('overnight_dryback_pct',prev.overnightDb),
+      ovPts:       grab('overnight_dryback_pts',prev.ovPts),
+      yPeak:       grab('yesterday_peak_vwc',   prev.yPeak),
+      yPeakT:      grab('yesterday_peak_time',  prev.yPeakT),
+      mLow:        grab('morning_low_vwc',      prev.mLow),
+      mLowT:       grab('morning_low_time',     prev.mLowT),
+      ecAtPeak:    grab('ec_at_peak',           prev.ecAtPeak),
+      noProg:      grab('no_program',           prev.noProg),
+    };
+  });
+  return out;
+}
+
+function _tr_parseSchedule(rows){
+  // Returns sch[roomId] = [{table, sensorName, sensorId, rampStart, rampEnd, frequency, duration, quantity, programId, isActive}]
+  if(!rows || rows.length<2) return {};
+  const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
+  const col = n => hdr.indexOf(n);
+  const out = {};
+  rows.slice(1).forEach(row=>{
+    const rid = String(row[col('room_id')]||'');
+    if(!rid) return;
+    const isActive = row[col('is_active')] === true || String(row[col('is_active')]).toLowerCase()==='true';
+    if(!isActive) return;
+    (out[rid] = out[rid] || []).push({
+      table:       parseInt(row[col('table_number')]) || null,
+      sensorName:  String(row[col('sensor_name')]||''),
+      sensorId:    String(row[col('sensor_id')]||''),
+      rampStart:   String(row[col('ramp_start')]||''),
+      rampEnd:     String(row[col('ramp_end')]||''),
+      frequency:   parseFloat(row[col('frequency')]) || null,  // minutes between shots
+      duration:    parseFloat(row[col('duration')])  || null,  // seconds per shot
+      quantity:    parseFloat(row[col('quantity')])  || null,
+      programId:   String(row[col('program_id')]||''),
+    });
+  });
+  // Sort by ramp start within each room for predictable cycle ordering
+  Object.values(out).forEach(arr => arr.sort((a,b) => String(a.rampStart).localeCompare(String(b.rampStart))));
+  return out;
+}
+
+function _tr_parseEvents(rows){
+  // Returns ev[roomId][tableNum] = [{ts, durSec, flag, isManual}], sorted asc
+  if(!rows || rows.length<2) return {};
+  const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
+  const col = n => hdr.indexOf(n);
+  const out = {};
+  rows.slice(1).forEach(row=>{
+    const rid = String(row[col('room_id')]||'');
+    const tnum = parseInt(row[col('table_number')]);
+    if(!rid || !tnum) return;
+    const ts = new Date(row[col('timestamp')]);
+    if(isNaN(ts.getTime())) return;
+    if(!out[rid]) out[rid] = {};
+    if(!out[rid][tnum]) out[rid][tnum] = [];
+    out[rid][tnum].push({
+      ts,
+      durSec:   row[col('duration_sec')],
+      flag:     String(row[col('flag')]||''),
+      isManual: row[col('is_manual')]===true || String(row[col('is_manual')]).toLowerCase()==='true',
+    });
+  });
+  Object.values(out).forEach(byTbl => Object.values(byTbl).forEach(arr => arr.sort((a,b)=>a.ts-b.ts)));
+  return out;
+}
+
+function _tr_parseHistory(rows){
+  // Returns hs[roomId] = [{ts, t1f, t1b, t2f, t2b, t3f, t3b}], sorted asc
+  if(!rows || rows.length<2) return {};
+  const hdr = rows[0].map(h=>String(h).toLowerCase().trim());
+  const col = n => hdr.indexOf(n);
+  const cTs   = col('timestamp');
+  const cRid  = col('room_id');
+  const c = {
+    t1f: col('t1f_vwc'), t1b: col('t1b_vwc'),
+    t2f: col('t2f_vwc'), t2b: col('t2b_vwc'),
+    t3f: col('t3f_vwc'), t3b: col('t3b_vwc'),
+  };
+  const num = v => { if(v===''||v==null) return null; const n=parseFloat(v); return isNaN(n)?null:n; };
+  const out = {};
+  rows.slice(1).forEach(row=>{
+    const rid = String(row[cRid]||'');
+    const ts = new Date(row[cTs]);
+    if(!rid || isNaN(ts.getTime())) return;
+    if(!out[rid]) out[rid] = [];
+    out[rid].push({
+      ts,
+      t1f:num(row[c.t1f]), t1b:num(row[c.t1b]),
+      t2f:num(row[c.t2f]), t2b:num(row[c.t2b]),
+      t3f:num(row[c.t3f]), t3b:num(row[c.t3b]),
+    });
+  });
+  Object.values(out).forEach(arr => arr.sort((a,b)=>a.ts-b.ts));
+  return out;
+}
+
+// ── Per-room card builder ─────────────────────────────────────────
+function _tr_renderRoomCard(room, cycleDay, phase, pm, sch, ev, hs){
+  const target  = getTuningVwcTarget(phase.id);
+  const dbTarget = phase.dryback;  // blueprint dryback % for this phase
+  const probesByTable = pm[room.id] || {};
+  const cycles = sch[room.id] || [];
+
+  // Group cycles by ramp_start window so we can label them P1/P2 etc heuristically
+  // Each row in cycles is one Rhythm program; multiple programs across the day = multiple "phases"
+  // Sort by ramp_start, then label sequentially. Each cycle is bound to a table by sensorName like "T1 F".
+  const cycleLabels = _tr_labelCycles(cycles);
+
+  // Build per-table data block
+  const tables = [1,2,3].map(tnum => _tr_buildTableData(room.id, tnum, probesByTable, ev, hs, cycles)).filter(t => t.hasData);
+
+  // Compute recommendations across tables
+  const recs = [];
+  const flags = [];
+
+  tables.forEach(t => {
+    const fStr = t.morningF != null ? t.morningF.toFixed(1)+'%' : '—';
+    const bStr = t.morningB != null ? t.morningB.toFixed(1)+'%' : '—';
+
+    // Front/back gap analysis (priority order: flag → worse-side → average fallback)
+    if(t.morningF != null && t.morningB != null){
+      const gap = Math.abs(t.morningF - t.morningB);
+      const drySide   = t.morningF < t.morningB ? 'front' : 'back';
+      const wetSide   = drySide === 'front' ? 'back' : 'front';
+      const dryVal    = Math.min(t.morningF, t.morningB);
+      const wetVal    = Math.max(t.morningF, t.morningB);
+
+      if(gap >= TUNING_GAP_ISSUE_PCT){
+        flags.push({ sev:'issue', text:`Table ${t.tableNum} front/back gap ${gap.toFixed(1)}% (${drySide} ${dryVal.toFixed(1)}%, ${wetSide} ${wetVal.toFixed(1)}%) — exceeds 8% threshold. Per DD 2.2 this is a hydraulics issue, not a tuning problem. Check dripper flow & line pressure on the ${drySide} side before adjusting shots.` });
+      } else if(gap >= TUNING_GAP_WATCH_PCT){
+        flags.push({ sev:'watch', text:`Table ${t.tableNum} front/back gap ${gap.toFixed(1)}% (${drySide} ${dryVal.toFixed(1)}%, ${wetSide} ${wetVal.toFixed(1)}%) — watch list. Tuning below targets the ${drySide} side (drier).` });
+      }
+
+      // Decide which value to tune on
+      // - Small gap (≤ TUNING_VWC_DEADBAND_PCT): use average
+      // - Larger gap: target the worse (drier) side
+      const tuneOn = gap <= TUNING_VWC_DEADBAND_PCT ? (t.morningF + t.morningB)/2 : dryVal;
+      const diff = tuneOn - target;
+      if(Math.abs(diff) >= TUNING_VWC_DEADBAND_PCT){
+        const cycForT = cycleLabels.filter(c => c.cycle.table === t.tableNum);
+        // P1 cycle = the first one of the day (earliest ramp_start)
+        const p1 = cycForT[0] || null;
+        if(p1){
+          const rec = _tr_buildDurationFreqRec(p1, diff, gap > TUNING_VWC_DEADBAND_PCT ? drySide : null);
+          recs.push({
+            sev: Math.abs(diff) > 4 ? 'issue' : 'watch',
+            table: t.tableNum,
+            cycle: p1.label,
+            rampStart: p1.cycle.rampStart,
+            currentDur: p1.cycle.duration,
+            currentFreq: p1.cycle.frequency,
+            newDur: rec.newDur,
+            newFreq: rec.newFreq,
+            why: `Morning low ${tuneOn.toFixed(1)}% vs ${target}% target` + (gap > TUNING_VWC_DEADBAND_PCT ? ` (tuning to ${drySide} probe — ${dryVal.toFixed(1)}%)` : '') + `. ${diff < 0 ? 'Substrate dried below target' : 'Substrate above target — too much water held overnight'}.`,
+          });
+        }
+      }
+    } else if(t.morningF == null && t.morningB == null){
+      flags.push({ sev:'info', text:`Table ${t.tableNum}: no morning VWC data — sensor outage or program not run yet.` });
+    }
+
+    // Overnight dryback comparison vs blueprint
+    if(dbTarget != null && t.overnightDbAvg != null){
+      const dbDiff = t.overnightDbAvg - dbTarget;
+      if(Math.abs(dbDiff) >= TUNING_DRYBACK_TOL_PCT){
+        const cycForT = cycleLabels.filter(c => c.cycle.table === t.tableNum);
+        const lastCycle = cycForT[cycForT.length-1] || null;
+        if(lastCycle){
+          // If overnight dryback is too HIGH, last shot of the night was too small or too early
+          // (substrate dried too much overnight). Bump duration or push lights-off shot later.
+          // If too LOW, last shot was too large or too late (substrate didn't dry back enough).
+          const dir = dbDiff > 0 ? 'too deep' : 'too shallow';
+          const fix = dbDiff > 0
+            ? 'lengthen last shot by ~5-10s or add 1 late-cycle shot to prevent overnight drift'
+            : 'shorten last shot by ~5-10s or remove the final cycle to allow more overnight drying';
+          recs.push({
+            sev: Math.abs(dbDiff) > 4 ? 'issue' : 'watch',
+            table: t.tableNum,
+            cycle: lastCycle.label + ' (last cycle)',
+            rampStart: lastCycle.cycle.rampStart,
+            currentDur: lastCycle.cycle.duration,
+            currentFreq: lastCycle.cycle.frequency,
+            newDur: dbDiff > 0 ? Math.round((lastCycle.cycle.duration||0) + 7) : Math.max(15, Math.round((lastCycle.cycle.duration||0) - 7)),
+            newFreq: lastCycle.cycle.frequency,
+            why: `Overnight dryback ${t.overnightDbAvg.toFixed(1)}% vs ${dbTarget}% target — ${dir}. ${fix}.`,
+          });
+        }
+      }
+    }
+
+    // Phantom-shot check: cycle fired but VWC didn't move
+    if(t.phantomShotCount > 0){
+      flags.push({ sev:'issue', text:`Table ${t.tableNum}: ${t.phantomShotCount} phantom shot${t.phantomShotCount>1?'s':''} detected — valve fired but VWC rose <0.4%. Check tank, line, valve, or manifold before tuning anything on this table.` });
+    }
+    // Manual shots
+    if(t.manualShotCount > 0){
+      flags.push({ sev:'info', text:`Table ${t.tableNum}: ${t.manualShotCount} manual shot${t.manualShotCount>1?'s':''} fired in last 24h. Tuning recommendations exclude manual shots from peak/low math where possible.` });
+    }
+  });
+
+  // Render
+  const sevColor = s => s==='issue'?'var(--red)':s==='watch'?'var(--amber)':s==='info'?'var(--blue)':'var(--green)';
+  const sevDot   = s => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sevColor(s)};margin-right:6px;vertical-align:middle"></span>`;
+
+  const tablesHtml = tables.map(t => {
+    const fStr = t.morningF != null ? t.morningF.toFixed(1)+'%' : '—';
+    const bStr = t.morningB != null ? t.morningB.toFixed(1)+'%' : '—';
+    const gap  = (t.morningF != null && t.morningB != null) ? Math.abs(t.morningF - t.morningB).toFixed(1)+'%' : '—';
+    const ovF  = t.overnightDbF != null ? t.overnightDbF.toFixed(1)+'%' : '—';
+    const ovB  = t.overnightDbB != null ? t.overnightDbB.toFixed(1)+'%' : '—';
+    const fOff = t.morningF != null ? (t.morningF - target) : null;
+    const bOff = t.morningB != null ? (t.morningB - target) : null;
+    const offColor = o => o==null?'var(--text3)':Math.abs(o)<TUNING_VWC_DEADBAND_PCT?'var(--green)':Math.abs(o)<4?'var(--amber)':'var(--red)';
+    return `<div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:6px 8px;font-size:11px;font-family:var(--mono);border-top:1px solid var(--border)">
+      <div style="color:var(--text3);font-weight:600">T${t.tableNum}</div>
+      <div><span style="color:var(--text3)">F </span><span style="color:${offColor(fOff)};font-weight:600">${fStr}</span></div>
+      <div><span style="color:var(--text3)">B </span><span style="color:${offColor(bOff)};font-weight:600">${bStr}</span></div>
+      <div><span style="color:var(--text3)">Δ </span>${gap}</div>
+      <div><span style="color:var(--text3)">DB </span>${ovF}/${ovB}</div>
+    </div>`;
+  }).join('');
+
+  const recsHtml = recs.length ? recs.map(r => {
+    const durChange = r.newDur != null && r.currentDur != null
+      ? `${r.currentDur}s → <b>${r.newDur}s</b> (Δ ${r.newDur > r.currentDur ? '+' : ''}${(r.newDur - r.currentDur).toFixed(0)}s)`
+      : `duration <b>${r.newDur}s</b>`;
+    const freqChange = r.newFreq != null && r.currentFreq != null && r.newFreq !== r.currentFreq
+      ? `, frequency ${r.currentFreq}m → <b>${r.newFreq}m</b>`
+      : (r.currentFreq != null ? `, frequency ${r.currentFreq}m unchanged` : '');
+    return `<div style="padding:10px 12px;border-left:3px solid ${sevColor(r.sev)};background:var(--bg);border-radius:0 var(--r) var(--r) 0;margin-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:6px">
+        <div style="font-size:12px;font-weight:600">${sevDot(r.sev)}T${r.table} · ${r.cycle} · starts ${r.rampStart}</div>
+      </div>
+      <div style="font-size:11px;font-family:var(--mono);color:var(--text);margin-bottom:4px">${durChange}${freqChange}</div>
+      <div style="font-size:11px;color:var(--text2);line-height:1.4">${r.why}</div>
+    </div>`;
+  }).join('') : '<div style="padding:10px 12px;color:var(--text3);font-size:12px;font-style:italic">Within target band — no tuning recommended today.</div>';
+
+  const flagsHtml = flags.length ? '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">'
+    + flags.map(f => `<div style="font-size:11px;color:${sevColor(f.sev)};margin-bottom:4px;line-height:1.4">${sevDot(f.sev)}${f.text}</div>`).join('')
+    + '</div>' : '';
+
+  const phaseColor = phase.id.startsWith('S')?'var(--green)':phase.id.startsWith('X')?'var(--amber)':phase.id.startsWith('E')?'var(--blue)':'var(--text3)';
+
+  return `<div class="card" style="padding:14px;border-left:3px solid ${phaseColor}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div>
+        <div style="font-size:14px;font-weight:700">${room.name}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${phase.id} · ${phase.name} · Day ${cycleDay}</div>
+      </div>
+      <div style="text-align:right;font-size:11px;font-family:var(--mono);color:var(--text2)">
+        <div>Target VWC: <b>${target}%</b></div>
+        ${dbTarget!=null?`<div>Target dryback: <b>${dbTarget}%</b></div>`:''}
+      </div>
+    </div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:10px">
+      <div style="display:grid;grid-template-columns:60px 1fr 1fr 1fr 1fr;gap:6px;padding:6px 8px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;background:var(--bg3)">
+        <div>Tbl</div><div>Front AM</div><div>Back AM</div><div>F/B Δ</div><div>Ovn DB F/B</div>
+      </div>
+      ${tablesHtml || '<div style="padding:10px;color:var(--text3);font-size:11px;text-align:center">No per-table data</div>'}
+    </div>
+    ${recsHtml}
+    ${flagsHtml}
+  </div>`;
+}
+
+// Build per-table data: morning VWC F/B, overnight dryback F/B, phantom/manual shot counts
+function _tr_buildTableData(roomId, tnum, probesByTable, ev, hs, cycles){
+  const fKey = 'T'+tnum+'F';
+  const bKey = 'T'+tnum+'B';
+  const fProbe = probesByTable[fKey];
+  const bProbe = probesByTable[bKey];
+  // Prefer V2 morning_low_vwc (pre-irrigation low). Fall back to day_low_vwc.
+  const mF = fProbe ? (fProbe.mLow != null && fProbe.mLow !== '' ? parseFloat(fProbe.mLow) : (fProbe.dayLowVwc!=null?parseFloat(fProbe.dayLowVwc):null)) : null;
+  const mB = bProbe ? (bProbe.mLow != null && bProbe.mLow !== '' ? parseFloat(bProbe.mLow) : (bProbe.dayLowVwc!=null?parseFloat(bProbe.dayLowVwc):null)) : null;
+  // Overnight dryback points (V2). Convert to % using yPeak as denominator if available.
+  function ovPct(probe){
+    if(!probe) return null;
+    const pts = probe.ovPts!=null && probe.ovPts !== '' ? parseFloat(probe.ovPts) : null;
+    const peak = probe.yPeak!=null && probe.yPeak !== '' ? parseFloat(probe.yPeak) : null;
+    if(pts != null && peak != null && peak > 0) return (pts / peak) * 100;
+    // Fallback to legacy overnight_dryback_pct if present
+    return probe.overnightDb != null && probe.overnightDb !== '' ? parseFloat(probe.overnightDb) : null;
+  }
+  const ovF = ovPct(fProbe);
+  const ovB = ovPct(bProbe);
+  const ovAvg = (ovF!=null && ovB!=null) ? (ovF+ovB)/2 : (ovF!=null?ovF:ovB);
+
+  // Phantom-shot check for this table: look at last 24h of fire events
+  // For each event, check if VWC at event time vs +30 min later rose by < 0.4%
+  let phantom = 0;
+  let manual = 0;
+  const evList = (ev[roomId] && ev[roomId][tnum]) || [];
+  const hsList = hs[roomId] || [];
+  const cutoff = Date.now() - 24*60*60*1000;
+  evList.forEach(e => {
+    if(e.ts.getTime() < cutoff) return;
+    if(e.isManual) manual++;
+    // Find VWC at event time and +30 min, F or B (whichever has data)
+    const targetMs1 = e.ts.getTime();
+    const targetMs2 = targetMs1 + 30*60*1000;
+    let v1 = null, v2 = null;
+    for(let i=0; i<hsList.length; i++){
+      const t = hsList[i].ts.getTime();
+      const fk = 't'+tnum+'f', bk = 't'+tnum+'b';
+      const v = (hsList[i][fk] != null ? hsList[i][fk] : hsList[i][bk]);
+      if(v == null) continue;
+      if(v1==null && t >= targetMs1 && t <= targetMs1 + 10*60*1000) v1 = v;
+      if(v2==null && t >= targetMs2 - 5*60*1000 && t <= targetMs2 + 10*60*1000) { v2 = v; break; }
+    }
+    if(v1!=null && v2!=null && (v2 - v1) < 0.4) phantom++;
+  });
+
+  return {
+    tableNum: tnum,
+    morningF: mF,
+    morningB: mB,
+    overnightDbF: ovF,
+    overnightDbB: ovB,
+    overnightDbAvg: ovAvg,
+    phantomShotCount: phantom,
+    manualShotCount: manual,
+    hasData: (mF!=null || mB!=null || ovF!=null || ovB!=null),
+  };
+}
+
+// Label each cycle as P1, P2, P3... based on sort order within table
+function _tr_labelCycles(cycles){
+  const byTable = {};
+  cycles.forEach(c => {
+    if(!c.table) return;
+    (byTable[c.table] = byTable[c.table] || []).push(c);
+  });
+  const labeled = [];
+  Object.values(byTable).forEach(arr => {
+    arr.sort((a,b) => String(a.rampStart).localeCompare(String(b.rampStart)));
+    arr.forEach((c, i) => labeled.push({ label: 'P'+(i+1), cycle: c }));
+  });
+  return labeled;
+}
+
+// Build duration + frequency recommendation given a VWC diff from target
+// Moderate aggressiveness:
+//   - Per 1% below target: +3-4s duration, -5 min frequency (more frequent)
+//   - Per 1% above target: -3-4s duration, +5 min frequency (less frequent)
+//   - Capped at ±15s and ±20 min per single recommendation
+function _tr_buildDurationFreqRec(p1, diff, drySide){
+  const curDur  = p1.cycle.duration  || 30;
+  const curFreq = p1.cycle.frequency || 90;
+  // diff < 0 means below target → need MORE water → +duration, -frequency
+  // diff > 0 means above target → need LESS water → -duration, +frequency
+  let durDelta  = Math.round(diff * -3.5);  // per 1% diff
+  let freqDelta = Math.round(diff *  5);    // per 1% diff
+  // Cap
+  durDelta  = Math.max(-15, Math.min(15, durDelta));
+  freqDelta = Math.max(-20, Math.min(20, freqDelta));
+  const newDur  = Math.max(15, curDur + durDelta);
+  const newFreq = Math.max(15, curFreq + freqDelta);
+  return { newDur, newFreq };
+}
 
 function renderBlueprint(){
   renderBlueprintGlobal();
