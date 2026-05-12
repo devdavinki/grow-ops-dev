@@ -10122,31 +10122,39 @@ function _tr_detectScheduleSanityIssues(p){
   const p2End   = toMin(p.maintenanceEnd);
   const lightsOn = toMin(p.lightsOnTime) || (8*60);
 
-  // Mode detection — cadence rooms (no P2) run P1 deep into the night by
-  // design per DD 2.2 §4-5. Their P1 schedule looks like a "misconfigured"
-  // P1+P2 schedule (P1 ending near midnight) but is actually the SOP.
   const cadence = isCadenceMode(p);
 
-  // ── Check 1: P1 ends at an unexpected time ──
-  // P1+P2 rooms: normal P1 ends 2 PM–7 PM (14:00–19:00). Anything past 8 PM
-  // means P1 has been incorrectly configured to do the work P2 should do.
-  // The real Room 8 example: P1 ends 00:00:45 (midnight) when it was a P1+P2
-  // room — catastrophic.
+  // ── Check 1: P1 end time self-consistency ──
+  // The catch we care about is data-entry typos in Growlink — the kind
+  // where someone enters a P1 end time that doesn't match the math implied
+  // by start + quantity × interval. Example from history: P1 entered as
+  // ending at 00:00:45 (midnight) when the program said 9 AM + 15 × 45 min
+  // = 8:15 PM — a 4+ hour discrepancy that produced catastrophic
+  // overwatering until corrected.
   //
-  // Cadence rooms: per DD 2.2 §5, the SOP-allowed last shots are 10:30 PM (19
-  // events), 11:15 PM (20 events), 12:00 AM (21 events). The "night" begins
-  // at 12:30 AM and lasts until 6 AM for a cadence room — that's the only
-  // window where a P1 end time would be suspicious.
-  if(p1End != null){
-    const inNightWindow = cadence
-      ? (p1End >= 0 && p1End < 6*60 && p1End >= 30) // cadence: only 12:30 AM – 6:00 AM is "wrong"
-      : (p1End >= 20*60 || p1End < 6*60);            // P1+P2: 8 PM – 6 AM is "wrong"
-    if(inNightWindow){
-      const display = p.rampEnd.replace(/:\d{2}$/, ''); // strip seconds
-      const expectedRange = cadence
-        ? `cadence rooms end between 10:30 PM and 12:00 AM (19–21 events)`
-        : `P1 normally ends afternoon/early evening`;
-      issues.push(`P1 ramp ends at <b>${display}</b> — that's late for this room. ${expectedRange}. Check the time in Growlink.`);
+  // We do NOT flag P1 ending late as suspicious on its own. A 16-shot P1
+  // at 45-min interval starting at 9 AM legitimately ends at 8:15 PM.
+  // That's not a misconfig — it's exactly what was programmed.
+  //
+  // The signal of a typo is that the entered end time doesn't reconcile
+  // with the entered shot count and interval. If they're within 5 minutes
+  // (allowing for shot-duration time), we trust the configuration.
+  // Mode-agnostic — both cadence and P1+P2 rooms benefit from this check.
+  if(p1End != null && p1Start != null && p.quantity && p.rampUpShotInterval){
+    const computedEndMin = p1Start + (p.quantity - 1) * p.rampUpShotInterval;
+    // Normalize for midnight crossover (last shot fires after midnight)
+    const computedEndMinNorm = computedEndMin % (24*60);
+    let p1EndNorm = p1End;
+    // If computed crosses midnight but entered doesn't, or vice versa,
+    // shift one to align day. Compare both as minutes-from-start-of-day.
+    let gap = Math.abs(p1EndNorm - computedEndMinNorm);
+    if(gap > 12*60) gap = 24*60 - gap; // wrap-around handling
+    if(gap > 5){
+      const display = p.rampEnd.replace(/:\d{2}$/, '');
+      const computedH = Math.floor(computedEndMinNorm / 60);
+      const computedM = computedEndMinNorm % 60;
+      const computedDisplay = `${String(computedH).padStart(2,'0')}:${String(computedM).padStart(2,'0')}`;
+      issues.push(`P1 end time <b>${display}</b> doesn't match the math. With ${p.quantity} shots × ${p.rampUpShotInterval}min starting at ${p.rampStart.replace(/:\d{2}$/, '')}, the last shot should fire around <b>${computedDisplay}</b> — that's a ${(gap/60).toFixed(1)}h gap. Check the Growlink entries for typos.`);
     }
   }
 
