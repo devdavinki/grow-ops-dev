@@ -6175,19 +6175,187 @@ function shotFireTime(startTimeStr, eventNumber, intervalMin){
 
 const DURATION_FLOOR_SEC = 35;
 
-// Compute a duration change in seconds given the current duration, the
-// VWC delta needed (positive = need more water; negative = need less),
-// and the program's onePercentShotSize (seconds per 1% VWC for that table).
-// Returns { newSec, hitFloor } or null if no valid change.
-function computeDurationChange(currentSec, vwcDeltaPct, onePercentShotSize){
-  if(!currentSec || !onePercentShotSize || vwcDeltaPct == null) return null;
-  const deltaSec = Math.round(vwcDeltaPct * onePercentShotSize);
-  if(deltaSec === 0) return null;
-  const proposedSec = currentSec + deltaSec;
-  if(proposedSec < DURATION_FLOOR_SEC){
-    return { newSec: DURATION_FLOOR_SEC, hitFloor: true };
+// ════════════════════════════════════════════════════════════════
+// DAILY WATER BUDGET MODEL — the right way to think about duration
+// ════════════════════════════════════════════════════════════════
+// Old approach (broken): "VWC delta × onePercentShotSize = duration delta."
+// This treated a 5% gap as "add 5% × 4s = 20s to every shot" — which dumps
+// the whole correction into one shot's duration. With a 38% gap, it
+// recommended 35s → 186s. That floods the substrate.
+//
+// New approach (correct): Each shot replenishes ~per-shot dryback worth
+// of VWC. Over the day, the cumulative replenishment must equal:
+//   dailyBudget = overnightDryback + (N-1) × perShotDrybackDuringDay
+// Per shot, the replenishment needed is:
+//   perShotReplenish = dailyBudget / N
+// Convert to seconds via the program's onePercentShotSize calibration.
+//
+// Example, DD 2.2 cadence room with 20 shots, 14% overnight dryback,
+// ~1% per-shot during-day dryback, onePercentShotSize = 4s:
+//   dailyBudget = 14 + 19 × 1 = 33%
+//   perShotReplenish = 33 / 20 = 1.65%
+//   idealDurationSec = 1.65 × 4 = ~7s
+// (If 7s is below the 35s pump floor, the SOP-recommended approach is
+// frequency steering, not duration steering — which matches DD 2.2 §18.)
+
+// Walk yesterday's shotFires and measure per-shot dryback during the day.
+// For each consecutive pair of shots, measure VWC right before shot N+1
+// minus VWC right after shot N. That difference is the substrate's
+// transpiration over one inter-shot interval. Average across all valid
+// pairs to get the "tooth height" of the sawtooth.
+//
+// Returns the average % drop, or null if not enough data.
+function measureActualPerShotDryback(a){
+  const cs = a.chartSeries;
+  if(!cs || !cs.shotFires || cs.shotFires.length < 2) return null;
+  // Use averaged F/B VWC for this calculation — per-shot dryback should
+  // reflect the substrate as a whole, not a single probe.
+  const allSamples = [];
+  for(let i = 0; i < cs.vwcF.length; i++){
+    allSamples.push({ts: cs.vwcF[i].ts, v: cs.vwcF[i].v});
   }
-  return { newSec: proposedSec, hitFloor: false };
+  for(let i = 0; i < cs.vwcB.length; i++){
+    allSamples.push({ts: cs.vwcB[i].ts, v: cs.vwcB[i].v});
+  }
+  if(!allSamples.length) return null;
+
+  function vwcAtTime(targetMs, windowMs){
+    let total = 0, count = 0;
+    for(let i = 0; i < allSamples.length; i++){
+      const d = Math.abs(allSamples[i].ts.getTime() - targetMs);
+      if(d < windowMs && allSamples[i].v != null){
+        total += allSamples[i].v;
+        count++;
+      }
+    }
+    return count > 0 ? total / count : null;
+  }
+
+  const drops = [];
+  for(let i = 0; i < cs.shotFires.length - 1; i++){
+    const shotN = cs.shotFires[i].ts.getTime();
+    const shotNext = cs.shotFires[i+1].ts.getTime();
+    // VWC right AFTER shot N (5–10 min after the shot, when substrate has
+    // absorbed but plant hasn't yet pulled meaningfully)
+    const afterN = vwcAtTime(shotN + 8*60*1000, 4*60*1000);
+    // VWC right BEFORE shot N+1 (5 min before fire, low point of the tooth)
+    const beforeNext = vwcAtTime(shotNext - 3*60*1000, 3*60*1000);
+    if(afterN != null && beforeNext != null && afterN > beforeNext){
+      drops.push(afterN - beforeNext);
+    }
+  }
+
+  if(drops.length < 2) return null;
+  return drops.reduce((s,v)=>s+v, 0) / drops.length;
+}
+
+// Get the per-shot during-day dryback for a table. Pull from program if
+// available (P2 maintenance dryback is the canonical "per cycle" dryback
+// for P1+P2 rooms), otherwise calculate from yesterday's measured data.
+//
+// Returns { value, source } where source is 'program' or 'measured' or
+// null if neither is available.
+function getPerShotDryback(p, a){
+  // For P1+P2 rooms, p.maintenanceDryback is the configured per-cycle dryback
+  if(p && p.maintenanceDryback != null && !isCadenceMode(p)){
+    return { value: p.maintenanceDryback, source: 'program' };
+  }
+  // Fall back to measured value from yesterday's data
+  const measured = measureActualPerShotDryback(a);
+  if(measured != null){
+    return { value: measured, source: 'measured' };
+  }
+  // Last-resort default for cadence rooms (~1.5% per shot based on DD 2.2
+  // typical sawtooth amplitude observed in screenshots)
+  if(p && isCadenceMode(p)){
+    return { value: 1.5, source: 'default' };
+  }
+  return { value: null, source: null };
+}
+
+// Compute the ideal shot duration based on the daily water budget model.
+// Returns { idealDurationSec, dailyBudgetPct, perShotPct, drybackInfo }
+// or null if required inputs are missing.
+//
+// Inputs:
+//   p              : program object (for onePercentShotSize, durationSec, etc)
+//   a              : table analysis (for measuring fallback per-shot dryback)
+//   shotCount      : number of shots in the phase (P1 quantity, or cadence N)
+//   overnightTarget: overnight dryback target % (e.g. 15% for DD 2.5)
+function computeDailyWaterBudget(p, a, shotCount, overnightTarget){
+  if(!p || !p.onePercentShotSize || !shotCount || shotCount < 1) return null;
+  if(overnightTarget == null) return null;
+
+  const drybackInfo = getPerShotDryback(p, a);
+  if(drybackInfo.value == null) return null;
+
+  // dailyBudget = overnight dryback + (N-1) inter-shot drybacks
+  const dailyBudgetPct = overnightTarget + Math.max(0, shotCount - 1) * drybackInfo.value;
+  const perShotPct = dailyBudgetPct / shotCount;
+  const idealDurationSec = Math.round(perShotPct * p.onePercentShotSize);
+
+  return {
+    idealDurationSec,
+    dailyBudgetPct,
+    perShotPct,
+    drybackInfo,
+  };
+}
+
+// Compute a duration change recommendation using the daily-budget model.
+// Returns { newSec, hitFloor, hitCeiling, idealSec, currentSec, perShotPct,
+//           dailyBudgetPct, drybackSource } or null if no valid change.
+//
+// Triggers a recommendation only if |current - ideal| ≥ 2s (operator-set
+// threshold for "meaningfully off"). Caps the proposed change at 2× the
+// current duration so we never recommend a flooding shot — if the ideal is
+// beyond that ceiling, the caller is expected to fall back to frequency
+// steering.
+function computeDurationChange(p, a, shotCount, overnightTarget, currentSec){
+  if(!currentSec) return null;
+  const budget = computeDailyWaterBudget(p, a, shotCount, overnightTarget);
+  if(!budget) return null;
+
+  const idealSec = budget.idealDurationSec;
+  const deltaSec = idealSec - currentSec;
+
+  // Threshold: don't recommend if within 2 seconds
+  if(Math.abs(deltaSec) < 2) return null;
+
+  // Cap at 2× current duration (or 0.5× when reducing). Anything beyond
+  // that ceiling is a sign the duration alone can't close the gap, and
+  // the caller should let frequency cover the rest.
+  let newSec = idealSec;
+  let hitCeiling = false;
+  if(newSec > currentSec * 2){
+    newSec = Math.round(currentSec * 2);
+    hitCeiling = true;
+  } else if(newSec < currentSec * 0.5){
+    newSec = Math.round(currentSec * 0.5);
+    hitCeiling = true;
+  }
+
+  let hitFloor = false;
+  if(newSec < DURATION_FLOOR_SEC){
+    newSec = DURATION_FLOOR_SEC;
+    hitFloor = true;
+  }
+
+  // If after flooring/capping the proposed value equals current, no change.
+  if(newSec === currentSec) return null;
+
+  return {
+    newSec,
+    hitFloor,
+    hitCeiling,
+    idealSec,                          // unbounded "true" ideal
+    currentSec,
+    perShotPct: budget.perShotPct,
+    dailyBudgetPct: budget.dailyBudgetPct,
+    shotCount,
+    drybackSource: budget.drybackInfo.source,
+    drybackValue: budget.drybackInfo.value,
+  };
 }
 
 // Build the dual-option recommendation line. Format depends on mode:
@@ -6198,13 +6366,23 @@ function computeDurationChange(currentSec, vwcDeltaPct, onePercentShotSize){
 // Returns the rec text as an HTML string (callers wrap in {sev:'action', text}).
 function dualOptionRec({
   leadOption,        // 'duration' | 'frequency' | 'interval'
-  duration,          // {currentSec, newSec, hitFloor} or null
+  duration,          // {currentSec, newSec, hitFloor, idealSec, perShotPct, dailyBudgetPct, shotCount, drybackSource, hitCeiling} or null
   frequency,         // {currentQty, newQty, newLastShot} or null
   interval,          // {currentMin, newMin} or null
   reason,            // short reason string for context
   rescueContext,     // optional: extra context if morning rescue fired
 }){
-  const fmtDuration = d => d ? `${d.currentSec}s → <b>${d.newSec}s</b>${d.hitFloor ? ' <span style="color:var(--amber);font-size:10px">(at 35s floor)</span>' : ''}` : null;
+  // Duration formatter — now includes the model context per spec:
+  //   "35s → 44s (model says ~44s; day needs 33% / 20 shots = 1.65%/shot)"
+  // If hitCeiling or hitFloor, flag visually so the operator knows duration
+  // alone won't close the full gap.
+  const fmtDuration = d => {
+    if(!d) return null;
+    let txt = `${d.currentSec}s → <b>${d.newSec}s</b>`;
+    if(d.hitFloor) txt += ` <span style="color:var(--amber);font-size:10px">(at 35s floor — duration alone can't close gap, use frequency)</span>`;
+    else if(d.hitCeiling) txt += ` <span style="color:var(--amber);font-size:10px">(capped at 2× — ideal was ${d.idealSec}s, use frequency for remainder)</span>`;
+    return txt;
+  };
   const fmtFrequency = f => f ? `${f.currentQty} → <b>${f.newQty}</b> shots${f.newLastShot ? ` (last shot ${f.newLastShot})` : ''}` : null;
   const fmtInterval = i => i ? `${i.currentMin}min → <b>${i.newMin}min</b>` : null;
 
@@ -6237,6 +6415,30 @@ function dualOptionRec({
       line += ` Or by ${opts[i].label}: ${opts[i].text}.`;
     }
   }
+
+  // Model context — append the math explanation when duration was part of
+  // the recommendation. Operators see how the ideal was computed so they
+  // can sanity-check (e.g. if perShotDryback measurement was off, the
+  // resulting math will look wrong and they can override). Per user spec:
+  //   "Day needs 28% / 14 shots = 2.0%/shot. Current shot delivers ~2.3%
+  //   (~12s over model). Recommended ~9s, capped at floor."
+  if(duration && duration.dailyBudgetPct != null){
+    const drybackLabel = {
+      'program': 'program',
+      'measured': 'measured yesterday',
+      'default': 'default est',
+    }[duration.drybackSource] || 'est';
+    const currentPerShotPct = duration.currentSec / (duration.currentSec / duration.perShotPct * (duration.perShotPct / Math.max(0.01, duration.perShotPct)));
+    // Simpler: current shot delivers (currentSec / onePercentShotSize)% per shot.
+    // We don't have onePercentShotSize directly here, but we can back into it:
+    // model says perShotPct corresponds to idealSec, so onePercentShotSize ≈ idealSec/perShotPct
+    const onePctSec = duration.idealSec / Math.max(0.01, duration.perShotPct);
+    const currentDeliveryPct = duration.currentSec / Math.max(0.01, onePctSec);
+    const deltaPct = currentDeliveryPct - duration.perShotPct;
+    const deltaLabel = deltaPct > 0 ? `${deltaPct.toFixed(1)}% over model` : `${(-deltaPct).toFixed(1)}% under model`;
+    line += ` <span style="color:var(--text3);font-size:11px">Day needs ${duration.dailyBudgetPct.toFixed(0)}% across ${duration.shotCount} shots = ${duration.perShotPct.toFixed(1)}%/shot. Current delivers ~${currentDeliveryPct.toFixed(1)}%/shot (${deltaLabel}). Dryback source: ${drybackLabel}.</span>`;
+  }
+
   if(reason) line += ` <span style="color:var(--text3)">${reason}</span>`;
   if(rescueContext) line += ` <span style="color:var(--amber)">${rescueContext}</span>`;
   return line;
@@ -9920,14 +10122,31 @@ function _tr_detectScheduleSanityIssues(p){
   const p2End   = toMin(p.maintenanceEnd);
   const lightsOn = toMin(p.lightsOnTime) || (8*60);
 
-  // ── Check 1: P1 ends in the middle of the night ──
-  // Normal P1 ends 2 PM–7 PM (14:00–19:00). Anything past 8 PM is suspicious.
-  // The real Room 8 example: P1 ends 00:00:45 (midnight). Catastrophic.
+  // Mode detection — cadence rooms (no P2) run P1 deep into the night by
+  // design per DD 2.2 §4-5. Their P1 schedule looks like a "misconfigured"
+  // P1+P2 schedule (P1 ending near midnight) but is actually the SOP.
+  const cadence = isCadenceMode(p);
+
+  // ── Check 1: P1 ends at an unexpected time ──
+  // P1+P2 rooms: normal P1 ends 2 PM–7 PM (14:00–19:00). Anything past 8 PM
+  // means P1 has been incorrectly configured to do the work P2 should do.
+  // The real Room 8 example: P1 ends 00:00:45 (midnight) when it was a P1+P2
+  // room — catastrophic.
+  //
+  // Cadence rooms: per DD 2.2 §5, the SOP-allowed last shots are 10:30 PM (19
+  // events), 11:15 PM (20 events), 12:00 AM (21 events). The "night" begins
+  // at 12:30 AM and lasts until 6 AM for a cadence room — that's the only
+  // window where a P1 end time would be suspicious.
   if(p1End != null){
-    const inNightWindow = p1End >= 20*60 || p1End < 6*60;
+    const inNightWindow = cadence
+      ? (p1End >= 0 && p1End < 6*60 && p1End >= 30) // cadence: only 12:30 AM – 6:00 AM is "wrong"
+      : (p1End >= 20*60 || p1End < 6*60);            // P1+P2: 8 PM – 6 AM is "wrong"
     if(inNightWindow){
       const display = p.rampEnd.replace(/:\d{2}$/, ''); // strip seconds
-      issues.push(`P1 ramp ends at <b>${display}</b> — that's in the night. P1 normally ends afternoon/early evening. Check the time in Growlink.`);
+      const expectedRange = cadence
+        ? `cadence rooms end between 10:30 PM and 12:00 AM (19–21 events)`
+        : `P1 normally ends afternoon/early evening`;
+      issues.push(`P1 ramp ends at <b>${display}</b> — that's late for this room. ${expectedRange}. Check the time in Growlink.`);
     }
   }
 
@@ -10395,13 +10614,24 @@ function _tr_renderCadenceBlock(a){
   function buildCadenceRec({direction, newQty, newLastShot, reason}){
     // direction: 'add' or 'remove'
     const frequencyOpt = {currentQty: quantity, newQty, newLastShot};
-    const VWC_DELTA = direction === 'add' ? 2 : -2;
-    const durationChange = (p.durationSec && p.onePercentShotSize)
-      ? computeDurationChange(p.durationSec, VWC_DELTA, p.onePercentShotSize)
+    // Compute ideal duration using the daily-water-budget model. For
+    // cadence rooms the overnight target is the midpoint of the SOP band
+    // (10–14%, midpoint 12%). Shot count is the program's current quantity.
+    const overnightTargetForBudget = (DD_TARGETS.cadence.drybackMin + DD_TARGETS.cadence.drybackMax) / 2;
+    const durationChange = (p.durationSec && p.onePercentShotSize && quantity)
+      ? computeDurationChange(p, a, quantity, overnightTargetForBudget, p.durationSec)
       : null;
-    const durationOpt = (durationChange && durationChange.newSec !== p.durationSec)
-      ? {currentSec: p.durationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
-      : null;
+    const durationOpt = durationChange ? {
+      currentSec: durationChange.currentSec,
+      newSec: durationChange.newSec,
+      hitFloor: durationChange.hitFloor,
+      hitCeiling: durationChange.hitCeiling,
+      idealSec: durationChange.idealSec,
+      perShotPct: durationChange.perShotPct,
+      dailyBudgetPct: durationChange.dailyBudgetPct,
+      shotCount: durationChange.shotCount,
+      drybackSource: durationChange.drybackSource,
+    } : null;
 
     // SOP §18 says duration changes are CD-approved exceptions for cadence
     // rooms. We surface it as the alternate so the team has the option, but
@@ -10511,14 +10741,27 @@ function _tr_renderP1Block(a){
         // Interval is NOT offered for P1 since changing P1 interval cascades
         // into P2 schedule — too disruptive for a routine ramp adjustment.
 
-        // avgDiff > 0 means substrate is ABOVE target → need less water
-        // avgDiff < 0 means substrate is BELOW target → need more water
-        const vwcDeltaNeeded = -avgDiff; // sign: + means add water, - means remove
-
-        const durationChange = computeDurationChange(p.durationSec, vwcDeltaNeeded, p.onePercentShotSize);
-        const durationOpt = (durationChange && durationChange.newSec !== p.durationSec)
-          ? {currentSec: p.durationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+        // Compute ideal duration using the daily-water-budget model.
+        // overnightTarget pulled from program's overnightDrybackTarget,
+        // falling back to additionalDryback (older schema) and finally to
+        // a reasonable default of 15% if neither is set.
+        const overnightTargetForBudget = (p.overnightDrybackTarget != null
+          ? p.overnightDrybackTarget
+          : (p.additionalDryback != null ? p.additionalDryback : 15));
+        const durationChange = (p.durationSec && p.onePercentShotSize && p.quantity)
+          ? computeDurationChange(p, a, p.quantity, overnightTargetForBudget, p.durationSec)
           : null;
+        const durationOpt = durationChange ? {
+          currentSec: durationChange.currentSec,
+          newSec: durationChange.newSec,
+          hitFloor: durationChange.hitFloor,
+          hitCeiling: durationChange.hitCeiling,
+          idealSec: durationChange.idealSec,
+          perShotPct: durationChange.perShotPct,
+          dailyBudgetPct: durationChange.dailyBudgetPct,
+          shotCount: durationChange.shotCount,
+          drybackSource: durationChange.drybackSource,
+        } : null;
 
         let shotsToAdjust = Math.round(avgDiff / p.rampUpShotSize);
         const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
@@ -10625,16 +10868,26 @@ function _tr_renderP2Block(a){
     //              → ADD water per shot (lengthen duration OR more shots OR shorter interval)
     //   diff < 0 = drybacks too SHALLOW (shots replenish too much water)
     //              → REMOVE water per shot (shorten duration OR fewer shots OR longer interval)
-    // VWC delta needed per shot ≈ -diff (sign convention: + means add water)
-    const vwcDeltaNeeded = -diff;
-
-    // DURATION option
-    const durationChange = (p.maintenanceDurationSec && p.onePercentShotSize)
-      ? computeDurationChange(p.maintenanceDurationSec, vwcDeltaNeeded, p.onePercentShotSize)
+    // DURATION option — daily budget model uses maintenance shot count
+    // and overnight dryback target.
+    const overnightTargetForBudget = (p.overnightDrybackTarget != null
+      ? p.overnightDrybackTarget
+      : (p.additionalDryback != null ? p.additionalDryback : 15));
+    const totalShots = (p.quantity || 0) + (p.maintenanceQuantity || 0);
+    const durationChange = (p.maintenanceDurationSec && p.onePercentShotSize && totalShots)
+      ? computeDurationChange(p, a, totalShots, overnightTargetForBudget, p.maintenanceDurationSec)
       : null;
-    const durationOpt = (durationChange && durationChange.newSec !== p.maintenanceDurationSec)
-      ? {currentSec: p.maintenanceDurationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
-      : null;
+    const durationOpt = durationChange ? {
+      currentSec: durationChange.currentSec,
+      newSec: durationChange.newSec,
+      hitFloor: durationChange.hitFloor,
+      hitCeiling: durationChange.hitCeiling,
+      idealSec: durationChange.idealSec,
+      perShotPct: durationChange.perShotPct,
+      dailyBudgetPct: durationChange.dailyBudgetPct,
+      shotCount: durationChange.shotCount,
+      drybackSource: durationChange.drybackSource,
+    } : null;
 
     // INTERVAL option (existing logic, kept as fallback)
     let intervalOpt = null;
@@ -10727,15 +10980,27 @@ function _tr_renderP0Block(a){
     // Build dual-option rec for "add support" (lengthen last shot OR add another).
     // The shot we'd lengthen is the LAST phase shot (P1 last if P2 off, else P2 last).
     const lastShotDurSec = p2IsOff ? p.durationSec : p.maintenanceDurationSec;
-    // We don't know exact VWC delta needed — use ~5% as a reasonable
-    // "add a meaningful resaturation shot's worth" heuristic.
-    const ASSUMED_DELTA = 5;
-    const durationChange = (lastShotDurSec && p.onePercentShotSize)
-      ? computeDurationChange(lastShotDurSec, ASSUMED_DELTA, p.onePercentShotSize)
+    // Use the daily-budget model — the rescue happened because yesterday's
+    // total water budget fell short. Compute the ideal duration for the
+    // phase whose last shot we'd lengthen.
+    const overnightTargetForBudget = (p.overnightDrybackTarget != null
+      ? p.overnightDrybackTarget
+      : (p.additionalDryback != null ? p.additionalDryback : 15));
+    const shotCountForBudget = p2IsOff ? (p.quantity || 0) : ((p.quantity || 0) + (p.maintenanceQuantity || 0));
+    const durationChange = (lastShotDurSec && p.onePercentShotSize && shotCountForBudget)
+      ? computeDurationChange(p, a, shotCountForBudget, overnightTargetForBudget, lastShotDurSec)
       : null;
-    const durationOpt = durationChange
-      ? {currentSec: lastShotDurSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
-      : null;
+    const durationOpt = durationChange ? {
+      currentSec: durationChange.currentSec,
+      newSec: durationChange.newSec,
+      hitFloor: durationChange.hitFloor,
+      hitCeiling: durationChange.hitCeiling,
+      idealSec: durationChange.idealSec,
+      perShotPct: durationChange.perShotPct,
+      dailyBudgetPct: durationChange.dailyBudgetPct,
+      shotCount: durationChange.shotCount,
+      drybackSource: durationChange.drybackSource,
+    } : null;
 
     const phaseQty = p2IsOff ? p.quantity : p.maintenanceQuantity;
     const frequencyOpt = phaseQty ? {currentQty: phaseQty, newQty: phaseQty + 1} : null;
@@ -10752,15 +11017,24 @@ function _tr_renderP0Block(a){
       lines.push({sev:'action', text:`⚠ ${rescueCtx} Lengthen last ${phaseTermForRec} shot (currently ${endTimeForRec}) or add one.`});
     }
   } else if(Math.abs(diff) >= 2){
-    // No rescue, dryback miss only. Standard dual-option rec.
+    // No rescue, dryback miss only. Standard dual-option rec using
+    // daily-budget model. The target overnight dryback IS our P0 target here.
     const lastShotDurSec = p2IsOff ? p.durationSec : p.maintenanceDurationSec;
-    const vwcDeltaNeeded = diff; // diff > 0 = dried too far → ADD water → positive delta
-    const durationChange = (lastShotDurSec && p.onePercentShotSize)
-      ? computeDurationChange(lastShotDurSec, vwcDeltaNeeded, p.onePercentShotSize)
+    const shotCountForBudget = p2IsOff ? (p.quantity || 0) : ((p.quantity || 0) + (p.maintenanceQuantity || 0));
+    const durationChange = (lastShotDurSec && p.onePercentShotSize && shotCountForBudget)
+      ? computeDurationChange(p, a, shotCountForBudget, target, lastShotDurSec)
       : null;
-    const durationOpt = (durationChange && durationChange.newSec !== lastShotDurSec)
-      ? {currentSec: lastShotDurSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
-      : null;
+    const durationOpt = durationChange ? {
+      currentSec: durationChange.currentSec,
+      newSec: durationChange.newSec,
+      hitFloor: durationChange.hitFloor,
+      hitCeiling: durationChange.hitCeiling,
+      idealSec: durationChange.idealSec,
+      perShotPct: durationChange.perShotPct,
+      dailyBudgetPct: durationChange.dailyBudgetPct,
+      shotCount: durationChange.shotCount,
+      drybackSource: durationChange.drybackSource,
+    } : null;
 
     // For frequency: if dried too far → add a late shot. If held too much → pull last shot.
     const phaseQty = p2IsOff ? p.quantity : p.maintenanceQuantity;
