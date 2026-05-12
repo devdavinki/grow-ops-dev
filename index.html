@@ -6157,6 +6157,152 @@ function shotFireTime(startTimeStr, eventNumber, intervalMin){
   return `${h}:${String(m).padStart(2,'0')} ${ampm}`;
 }
 
+// ════════════════════════════════════════════════════════════════
+// ADJUSTMENT-OUTPUT HELPERS — duration-first dual-option rec language
+// ════════════════════════════════════════════════════════════════
+// Per facility guidance:
+//   1. Duration is the easiest change (single field in Growlink)
+//   2. Frequency (event count) is moderately easy
+//   3. Interval is hardest (retimes the whole schedule on both blueprints)
+//
+// Hard constraint: shot duration must stay ≥ 35s. Below that the pump
+// doesn't deliver consistently.
+//
+// For DD 2.2 cadence rooms, SOP §18 says duration changes are CD-approved
+// exceptions, not routine steering. We honor that by leading with event-
+// count and showing duration as the alternate (per user instruction option 3).
+// For DD 2.5 P1+P2 rooms, no SOP restriction — duration leads.
+
+const DURATION_FLOOR_SEC = 35;
+
+// Compute a duration change in seconds given the current duration, the
+// VWC delta needed (positive = need more water; negative = need less),
+// and the program's onePercentShotSize (seconds per 1% VWC for that table).
+// Returns { newSec, hitFloor } or null if no valid change.
+function computeDurationChange(currentSec, vwcDeltaPct, onePercentShotSize){
+  if(!currentSec || !onePercentShotSize || vwcDeltaPct == null) return null;
+  const deltaSec = Math.round(vwcDeltaPct * onePercentShotSize);
+  if(deltaSec === 0) return null;
+  const proposedSec = currentSec + deltaSec;
+  if(proposedSec < DURATION_FLOOR_SEC){
+    return { newSec: DURATION_FLOOR_SEC, hitFloor: true };
+  }
+  return { newSec: proposedSec, hitFloor: false };
+}
+
+// Build the dual-option recommendation line. Format depends on mode:
+//   - DD 2.5 (P1+P2): "Easy fix: duration 45s → 55s. Or by frequency: 14 → 15 shots."
+//   - DD 2.2 (cadence): "Add 1 shot → 21 events (last shot 12:00 AM). Or by duration: 45s → 55s."
+// Either option can be null/skipped; we render what's available.
+//
+// Returns the rec text as an HTML string (callers wrap in {sev:'action', text}).
+function dualOptionRec({
+  leadOption,        // 'duration' | 'frequency' | 'interval'
+  duration,          // {currentSec, newSec, hitFloor} or null
+  frequency,         // {currentQty, newQty, newLastShot} or null
+  interval,          // {currentMin, newMin} or null
+  reason,            // short reason string for context
+  rescueContext,     // optional: extra context if morning rescue fired
+}){
+  const fmtDuration = d => d ? `${d.currentSec}s → <b>${d.newSec}s</b>${d.hitFloor ? ' <span style="color:var(--amber);font-size:10px">(at 35s floor)</span>' : ''}` : null;
+  const fmtFrequency = f => f ? `${f.currentQty} → <b>${f.newQty}</b> shots${f.newLastShot ? ` (last shot ${f.newLastShot})` : ''}` : null;
+  const fmtInterval = i => i ? `${i.currentMin}min → <b>${i.newMin}min</b>` : null;
+
+  // Build the available options, ordered with lead first
+  const opts = [];
+  const labels = {duration: 'duration', frequency: 'frequency', interval: 'interval'};
+  const fmts = {duration: fmtDuration, frequency: fmtFrequency, interval: fmtInterval};
+  const data = {duration, frequency, interval};
+
+  // Lead option first
+  if(data[leadOption] && fmts[leadOption](data[leadOption])){
+    opts.push({lead: true, label: labels[leadOption], text: fmts[leadOption](data[leadOption])});
+  }
+  // Then everything else available
+  ['duration', 'frequency', 'interval'].forEach(k => {
+    if(k === leadOption) return;
+    if(data[k] && fmts[k](data[k])){
+      opts.push({lead: false, label: labels[k], text: fmts[k](data[k])});
+    }
+  });
+
+  if(!opts.length) return null;
+
+  let line;
+  if(opts.length === 1){
+    line = `<b>Adjust ${opts[0].label}:</b> ${opts[0].text}.`;
+  } else {
+    line = `<b>Easy fix — ${opts[0].label}:</b> ${opts[0].text}.`;
+    for(let i = 1; i < opts.length; i++){
+      line += ` Or by ${opts[i].label}: ${opts[i].text}.`;
+    }
+  }
+  if(reason) line += ` <span style="color:var(--text3)">${reason}</span>`;
+  if(rescueContext) line += ` <span style="color:var(--amber)">${rescueContext}</span>`;
+  return line;
+}
+
+// Detect morning manual-rescue irrigation: manual fires (isManual=true) in
+// the window from midnight UTC to ~lights-on. These are signals that the
+// previous day's program left the room under-supported — the team had to
+// physically intervene to bring VWC/EC back to an acceptable starting point.
+//
+// Reads from chartSeries.shotFires (already filtered to this table's events
+// within the 24h window). Returns:
+//   { fired, count, firstTime, vwcDelta }   if any manual fires found
+//   { fired: false }                          otherwise
+//
+// vwcDelta is approximate: VWC at first manual fire vs VWC 30 minutes later,
+// using the per-probe averages. Useful as context, not as exact accounting.
+function detectMorningRescue(a){
+  const cs = a.chartSeries;
+  if(!cs || !cs.shotFires || !cs.shotFires.length) return { fired: false };
+
+  // Morning window = chart's winEnd (today lights-on UTC) - 6h ... + 30min
+  // This covers manual fires from ~2 AM CDT through ~8:30 AM CDT, which
+  // captures both true overnight rescues and morning-of resaturation.
+  const winEnd = cs.winEnd;
+  const start = winEnd - 6 * 60 * 60 * 1000;
+  const end   = winEnd + 30 * 60 * 1000;
+
+  const manuals = cs.shotFires.filter(s => {
+    if(!s.isManual) return false;
+    const t = s.ts.getTime();
+    return t >= start && t <= end;
+  });
+  if(!manuals.length) return { fired: false };
+
+  // Get the first manual fire's time
+  const first = manuals[0];
+  const firstMs = first.ts.getTime();
+
+  // Compute VWC delta: 5 min before vs 30 min after, averaged across F and B.
+  function avgVwcAround(targetMs, windowMs){
+    const fSamples = (cs.vwcF || []).filter(s => Math.abs(s.ts.getTime() - targetMs) < windowMs);
+    const bSamples = (cs.vwcB || []).filter(s => Math.abs(s.ts.getTime() - targetMs) < windowMs);
+    const all = [...fSamples, ...bSamples].map(s => s.v).filter(v => v != null);
+    if(!all.length) return null;
+    return all.reduce((s,v)=>s+v, 0) / all.length;
+  }
+  const before = avgVwcAround(firstMs - 5*60*1000, 5*60*1000);
+  const after  = avgVwcAround(firstMs + 30*60*1000, 10*60*1000);
+  const vwcDelta = (before != null && after != null) ? (after - before) : null;
+
+  // Format time as local "h:mm AM" — CDT hard-code per dev skill 10.8
+  const d = first.ts;
+  let localH = (d.getUTCHours() - 5 + 24) % 24;
+  const ampm = localH >= 12 ? 'PM' : 'AM';
+  const h12 = localH % 12 || 12;
+  const firstTime = `${h12}:${String(d.getUTCMinutes()).padStart(2,'0')} ${ampm}`;
+
+  return {
+    fired: true,
+    count: manuals.length,
+    firstTime,
+    vwcDelta,
+  };
+}
+
 // ══════════════════════════════════════════════
 // METRC DATA — CSV/XLSX IMPORT + VIEWER
 // ══════════════════════════════════════════════
@@ -10092,12 +10238,24 @@ function _tr_renderTableChart(a){
     <line x1="${PAD.left}" y1="${PAD.top+plotH}" x2="${PAD.left+plotW}" y2="${PAD.top+plotH}" stroke="var(--text3)" stroke-width="0.5"/>
   </svg>`;
 
-  // ── F/B divergence notice ──
-  // If F and B diverged by more than the SOP §3.A.14 watch-list threshold
-  // (8% for "intervention required" — we surface the watch-list 5-8% band
-  // here as advisory, not action). Look at peak-to-peak F vs B and morning
-  // low F vs B to catch sustained spread, not single-minute noise.
-  let divergenceNotice = '';
+  // ── Consolidated chart-card flags ──
+  // Two signals shown together above-or-below the legend so the operator
+  // sees all relevant context for the chart in one place:
+  //   1. Morning manual rescue — team intervened, factors into rec engine
+  //   2. F/B probe divergence — substrate uneven, per SOP §3.A.14
+  // Both are advisory (don't change recommendations on their own — the
+  // rec engine reads the rescue signal directly).
+  const flagsHtml = [];
+
+  // Morning rescue flag
+  const rescue = detectMorningRescue(a);
+  if(rescue.fired){
+    const deltaStr = rescue.vwcDelta != null ? ` (+${rescue.vwcDelta.toFixed(1)}% VWC)` : '';
+    const countStr = rescue.count > 1 ? ` · ${rescue.count} manual fires` : '';
+    flagsHtml.push(`<div style="padding:5px 8px;font-size:10px;color:var(--amber);background:rgba(245,158,11,0.08);border-radius:var(--r);font-family:var(--mono)">⚠ Manual rescue at ${rescue.firstTime}${deltaStr}${countStr} — yesterday's program left the room under-supported. Factored into rec below.</div>`);
+  }
+
+  // F/B divergence flag
   const fMax = cs.vwcF.length ? Math.max(...cs.vwcF.map(s => s.v)) : null;
   const bMax = cs.vwcB.length ? Math.max(...cs.vwcB.map(s => s.v)) : null;
   if(fMax != null && bMax != null){
@@ -10105,15 +10263,20 @@ function _tr_renderTableChart(a){
     if(peakGap >= 5){
       const sev = peakGap >= 8 ? 'issue' : 'watch';
       const color = sev === 'issue' ? 'var(--red)' : 'var(--amber)';
+      const bg = sev === 'issue' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)';
       const drier = fMax < bMax ? 'F (front)' : 'B (back)';
-      divergenceNotice = `<div style="margin:4px 8px 0;padding:5px 8px;font-size:10px;color:${color};background:${sev==='issue'?'rgba(239,68,68,0.08)':'rgba(245,158,11,0.08)'};border-radius:var(--r);font-family:var(--mono)">⚠ F/B peak gap ${peakGap.toFixed(1)}% — ${drier} ran drier. Per DD 2.2 §3.A.14: 5–8% = watch-list, &gt;8% = intervention. Check dripper seating on the drier side.</div>`;
+      flagsHtml.push(`<div style="padding:5px 8px;font-size:10px;color:${color};background:${bg};border-radius:var(--r);font-family:var(--mono)">⚠ F/B peak gap ${peakGap.toFixed(1)}% — ${drier} ran drier. Per DD 2.2 §3.A.14: 5–8% = watch-list, &gt;8% = intervention. Check dripper seating on the drier side.</div>`);
     }
   }
+
+  const flagsBlock = flagsHtml.length
+    ? `<div style="display:flex;flex-direction:column;gap:4px;margin:4px 8px 0">${flagsHtml.join('')}</div>`
+    : '';
 
   return `<div style="margin:6px 0 4px;padding:8px 4px 0;background:var(--bg);border-radius:var(--r)">
     ${svg}
     ${legend}
-    ${divergenceNotice}
+    ${flagsBlock}
   </div>`;
 }
 
@@ -10214,44 +10377,86 @@ function _tr_renderCadenceBlock(a){
   const triggerIncrease = (morningLow <= t.morningVwcLowTrigger) || (drybackPts > t.drybackHighTrigger);
   const triggerDecrease = (morningLow >= t.morningVwcHighTrigger) || (drybackPts < t.drybackLowTrigger);
 
-  if(drybackInBand && morningInBand){
-    lines.push({sev:'ok', text:`✓ <b>Hold ${quantity||'current'} events</b>. Cadence is dialed — peak, morning low, and dryback all in band per DD 2.2.`});
-  } else if(triggerIncrease && !triggerDecrease){
-    // Add one shot — recommend a count and show where the new last shot would fire.
+  // Morning rescue overrides: if team manually watered overnight, the room
+  // was under-supported regardless of what dryback math says. Lean toward
+  // adding cadence support.
+  const rescue = detectMorningRescue(a);
+  const rescueCtx = rescue.fired
+    ? `Manual rescue at ${rescue.firstTime}${rescue.vwcDelta != null ? ' (+'+rescue.vwcDelta.toFixed(1)+'%)':''} — room needed extra water.`
+    : null;
+
+  // Per user spec: cadence rooms lead with event-count (honoring DD 2.2 §18)
+  // but show duration as the alternate option since duration is the easier
+  // physical change for the team.
+  //
+  // Duration alternate uses program's durationSec and onePercentShotSize:
+  // a ±2% VWC adjustment ≈ ±(2 × onePercentShotSize) seconds.
+
+  function buildCadenceRec({direction, newQty, newLastShot, reason}){
+    // direction: 'add' or 'remove'
+    const frequencyOpt = {currentQty: quantity, newQty, newLastShot};
+    const VWC_DELTA = direction === 'add' ? 2 : -2;
+    const durationChange = (p.durationSec && p.onePercentShotSize)
+      ? computeDurationChange(p.durationSec, VWC_DELTA, p.onePercentShotSize)
+      : null;
+    const durationOpt = (durationChange && durationChange.newSec !== p.durationSec)
+      ? {currentSec: p.durationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+      : null;
+
+    // SOP §18 says duration changes are CD-approved exceptions for cadence
+    // rooms. We surface it as the alternate so the team has the option, but
+    // append a small note so they know it's not the routine first move.
+    let durationNote = '';
+    if(durationOpt) durationNote = ` <span style="color:var(--text3)">(DD 2.2 §18: duration change is CD-approved exception)</span>`;
+
+    const text = dualOptionRec({
+      leadOption: 'frequency',
+      frequency: frequencyOpt,
+      duration: durationOpt,
+      reason,
+      rescueContext: rescueCtx,
+    });
+    return text ? text + durationNote : null;
+  }
+
+  if(drybackInBand && morningInBand && !rescue.fired){
+    lines.push({sev:'ok', text:`✓ <b>Hold ${quantity||'current'} events</b>. Cadence is dialed.`});
+  } else if(triggerIncrease || rescue.fired){
+    // Either dryback/morning triggered an increase, OR the team had to
+    // rescue manually — in both cases the answer is more support.
     const newQty = quantity ? quantity + 1 : null;
     const newLastShot = (newQty && interval) ? shotFireTime(startTime, newQty, interval) : null;
     if(newQty != null && newQty > t.maxEvents){
-      // Already at the SOP ceiling. Surface it as data-quality / escalation instead.
-      lines.push({sev:'action', text:`Current cadence is already at ${quantity} events — SOP §13 caps at ${t.maxEvents}. Dryback is ${drybackPts.toFixed(1)}% (target ${t.drybackMin}–${t.drybackMax}%) and morning low is ${morningLow.toFixed(1)}% (target ${t.morningVwcMin}–${t.morningVwcMax}%). Escalate to Fertigation Lead — additional support beyond ${t.maxEvents} events is a CD-approved exception, not a cadence steering call.`});
+      lines.push({sev:'action', text:`At SOP §13 ceiling (${t.maxEvents} events). Dryback ${drybackPts.toFixed(1)}%, morning low ${morningLow.toFixed(1)}%. Escalate to Fertigation Lead — additional support is CD-approved exception.${rescueCtx ? ' <span style="color:var(--amber)">'+rescueCtx+'</span>' : ''}`});
     } else if(newQty != null && newLastShot != null){
-      const reason = drybackPts > t.drybackHighTrigger
-        ? `overnight dryback ${drybackPts.toFixed(1)}% is over the ${t.drybackMax}% ceiling`
-        : `morning low ${morningLow.toFixed(1)}% is under the ${t.morningVwcMin}% floor`;
-      lines.push({sev:'action', text:`<b>Add one shot → ${newQty} events.</b> At the ${interval}-min cadence, the new shot fires at <b>${newLastShot}</b> (currently last shot at ${currentLastShot||'?'}). Trigger: ${reason}. Per SOP §8: later last shot reduces overnight dryback.`});
+      const reason = rescue.fired
+        ? null  // rescue context speaks for itself
+        : (drybackPts > t.drybackHighTrigger
+            ? `Dryback ${drybackPts.toFixed(1)}% over ${t.drybackMax}% ceiling.`
+            : `Morning low ${morningLow.toFixed(1)}% under ${t.morningVwcMin}% floor.`);
+      const text = buildCadenceRec({direction: 'add', newQty, newLastShot, reason});
+      if(text) lines.push({sev:'action', text});
     }
-  } else if(triggerDecrease && !triggerIncrease){
+  } else if(triggerDecrease){
     const newQty = quantity ? quantity - 1 : null;
     const newLastShot = (newQty && interval) ? shotFireTime(startTime, newQty, interval) : null;
     if(newQty != null && newQty < t.minEvents){
-      lines.push({sev:'action', text:`Current cadence is already at ${quantity} events — SOP §13 floor is ${t.minEvents}. Dryback is ${drybackPts.toFixed(1)}% (target ${t.drybackMin}–${t.drybackMax}%) and morning low is ${morningLow.toFixed(1)}% (target ${t.morningVwcMin}–${t.morningVwcMax}%). Escalate to Fertigation Lead — pulling below ${t.minEvents} events is a CD-approved exception.`});
+      lines.push({sev:'action', text:`At SOP §13 floor (${t.minEvents} events). Dryback ${drybackPts.toFixed(1)}%, morning low ${morningLow.toFixed(1)}%. Escalate to Fertigation Lead — pulling below ${t.minEvents} is CD-approved exception.`});
     } else if(newQty != null && newLastShot != null){
       const reason = drybackPts < t.drybackLowTrigger
-        ? `overnight dryback ${drybackPts.toFixed(1)}% is under the ${t.drybackMin}% floor (root zone holding too much water)`
-        : `morning low ${morningLow.toFixed(1)}% is over the ${t.morningVwcMax}% ceiling`;
-      lines.push({sev:'action', text:`<b>Remove one shot → ${newQty} events.</b> At the ${interval}-min cadence, the last shot moves from ${currentLastShot||'?'} to <b>${newLastShot}</b>. Trigger: ${reason}. Per SOP §8: earlier last shot increases overnight dryback.`});
+        ? `Dryback ${drybackPts.toFixed(1)}% under ${t.drybackMin}% floor — root zone holding too much water.`
+        : `Morning low ${morningLow.toFixed(1)}% over ${t.morningVwcMax}% ceiling.`;
+      const text = buildCadenceRec({direction: 'remove', newQty, newLastShot, reason});
+      if(text) lines.push({sev:'action', text});
     }
-  } else if(triggerIncrease && triggerDecrease){
-    // Conflicting signals — both directions triggered. Don't auto-adjust.
-    lines.push({sev:'info', text:`Conflicting signals: one metric reads "needs more support" and another reads "needs less." Per DD 2.2 §14: react to trends, not single points. Watch 2–3 days before changing cadence.`});
   } else {
-    // One metric out of band but not past the SOP trigger threshold, OR
-    // dryback in band but morning low drifting (the "don't chase VWC alone" case).
+    // Drift within tolerance — hold per DD 2.2 §14.
     if(drybackInBand && !morningInBand){
-      lines.push({sev:'ok', text:`✓ Dryback in band at ${drybackPts.toFixed(1)}%. Morning low is ${morningLow.toFixed(1)}% (band ${t.morningVwcMin}–${t.morningVwcMax}%) but hasn't crossed the SOP §10 trigger. Per operator guidance: dryback is the dominant signal — don't chase VWC alone. <b>Hold ${quantity||'current'} events.</b>`});
+      lines.push({sev:'ok', text:`✓ Dryback in band at ${drybackPts.toFixed(1)}%. Morning low drifting (${morningLow.toFixed(1)}%) but under SOP trigger. <b>Hold ${quantity||'current'} events</b> — dryback is dominant signal.`});
     } else if(morningInBand && !drybackInBand){
-      lines.push({sev:'info', text:`Morning low in band at ${morningLow.toFixed(1)}%. Dryback is ${drybackPts.toFixed(1)}% (band ${t.drybackMin}–${t.drybackMax}%) but hasn't crossed the SOP §10 trigger. <b>Hold ${quantity||'current'} events</b> and watch tomorrow.`});
+      lines.push({sev:'info', text:`Morning low in band. Dryback drifting (${drybackPts.toFixed(1)}%) but under SOP trigger. <b>Hold ${quantity||'current'} events</b>, watch tomorrow.`});
     } else {
-      lines.push({sev:'info', text:`Both metrics drifting from center but neither has crossed the SOP §10 trigger thresholds. <b>Hold ${quantity||'current'} events</b> and watch 1–2 more days for a clear signal.`});
+      lines.push({sev:'info', text:`Both metrics drifting but under SOP trigger thresholds. <b>Hold ${quantity||'current'} events</b>, watch 1–2 more days.`});
     }
   }
 
@@ -10299,23 +10504,36 @@ function _tr_renderP1Block(a){
 
     if(p.rampUpShotSize && p.quantity && avgDiff != null){
       if(Math.abs(avgDiff) >= 2){
+        // We need to close avgDiff% of VWC gap. Two viable levers:
+        //   Duration: change current shot length by (avgDiff × onePercentShotSize) sec
+        //   Frequency: change quantity by round(avgDiff ÷ rampUpShotSize) shots
+        // Per facility preference: duration leads, frequency is the alternate.
+        // Interval is NOT offered for P1 since changing P1 interval cascades
+        // into P2 schedule — too disruptive for a routine ramp adjustment.
+
+        // avgDiff > 0 means substrate is ABOVE target → need less water
+        // avgDiff < 0 means substrate is BELOW target → need more water
+        const vwcDeltaNeeded = -avgDiff; // sign: + means add water, - means remove
+
+        const durationChange = computeDurationChange(p.durationSec, vwcDeltaNeeded, p.onePercentShotSize);
+        const durationOpt = (durationChange && durationChange.newSec !== p.durationSec)
+          ? {currentSec: p.durationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+          : null;
+
         let shotsToAdjust = Math.round(avgDiff / p.rampUpShotSize);
-        // CAP magnitude at ±50% of current quantity. Anything bigger than
-        // that is data quality, not tuning — surface with a disclaimer
-        // instead of a destructive recommendation.
         const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
         const cappedAdjust = Math.max(-maxAdjust, Math.min(maxAdjust, shotsToAdjust));
-        const wasCapped = (cappedAdjust !== shotsToAdjust);
         const newQty = Math.max(1, p.quantity - cappedAdjust);
+        const frequencyOpt = (cappedAdjust !== 0)
+          ? {currentQty: p.quantity, newQty}
+          : null;
 
-        if(cappedAdjust !== 0){
-          const dir = cappedAdjust > 0 ? 'REDUCE' : 'ADD';
-          const change = cappedAdjust > 0 ? `${cappedAdjust} fewer shots` : `${Math.abs(cappedAdjust)} more shots`;
-          const closesPct = Math.abs(cappedAdjust) * p.rampUpShotSize;
-          let text = `<b>${dir} P1 quantity</b> from ${p.quantity} → <b>${newQty}</b> shots. ${change} × ${p.rampUpShotSize}% per shot = ${closesPct.toFixed(1)}% closer to target (table avg ${avgEnd.toFixed(1)}%).`;
-          if(wasCapped){
-            text += ` <span style="color:var(--text3)">(Capped: full correction would need ${Math.abs(shotsToAdjust)} shots — suggests data quality or major program drift.)</span>`;
-          }
+        // If duration hit floor, fall to frequency-lead automatically per spec
+        const leadOption = (durationOpt && !durationOpt.hitFloor) ? 'duration' : 'frequency';
+
+        const reason = `Table avg ${avgEnd.toFixed(1)}% vs target ${target}% (${avgDiff > 0 ? '+' : ''}${avgDiff.toFixed(1)}%).`;
+        const text = dualOptionRec({leadOption, duration: durationOpt, frequency: frequencyOpt, reason});
+        if(text){
           lines.push({sev:'action', text});
         } else {
           lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
@@ -10401,18 +10619,46 @@ function _tr_renderP2Block(a){
   const status = Math.abs(diff) < 1 ? '✓ on target' : (diff < 0 ? `${(-diff).toFixed(1)}% under target` : `${diff.toFixed(1)}% over target`);
   lines.push({sev:'data', text:`Measured ${r.cycles.length} P2 cycles · avg dryback <b>${r.avgDryback.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
-  if(Math.abs(diff) >= 1 && p.maintenanceFreq){
-    const factor = target / r.avgDryback;
-    let newFreq = Math.round(p.maintenanceFreq * factor / 5) * 5;
-    const minNew = Math.max(15, Math.round(p.maintenanceFreq * 0.5));
-    const maxNew = Math.round(p.maintenanceFreq * 2);
-    newFreq = Math.max(minNew, Math.min(maxNew, newFreq));
-    if(newFreq !== p.maintenanceFreq){
-      const dir = newFreq > p.maintenanceFreq ? 'EXTEND' : 'SHORTEN';
-      const reason = diff < 0 ? 'fewer/longer gaps between shots = bigger drybacks' : 'shorter gaps = smaller drybacks';
-      lines.push({sev:'action', text:`<b>${dir} P2 interval</b> from ${p.maintenanceFreq} → <b>${newFreq}</b> min. ${reason}.`});
+  if(Math.abs(diff) >= 1){
+    // P2 dryback miss → tune in priority order: duration, frequency, interval.
+    //   diff > 0 = drybacks too DEEP (shots aren't replenishing enough water)
+    //              → ADD water per shot (lengthen duration OR more shots OR shorter interval)
+    //   diff < 0 = drybacks too SHALLOW (shots replenish too much water)
+    //              → REMOVE water per shot (shorten duration OR fewer shots OR longer interval)
+    // VWC delta needed per shot ≈ -diff (sign convention: + means add water)
+    const vwcDeltaNeeded = -diff;
+
+    // DURATION option
+    const durationChange = (p.maintenanceDurationSec && p.onePercentShotSize)
+      ? computeDurationChange(p.maintenanceDurationSec, vwcDeltaNeeded, p.onePercentShotSize)
+      : null;
+    const durationOpt = (durationChange && durationChange.newSec !== p.maintenanceDurationSec)
+      ? {currentSec: p.maintenanceDurationSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+      : null;
+
+    // INTERVAL option (existing logic, kept as fallback)
+    let intervalOpt = null;
+    if(p.maintenanceFreq){
+      const factor = target / r.avgDryback;
+      let newFreq = Math.round(p.maintenanceFreq * factor / 5) * 5;
+      const minNew = Math.max(15, Math.round(p.maintenanceFreq * 0.5));
+      const maxNew = Math.round(p.maintenanceFreq * 2);
+      newFreq = Math.max(minNew, Math.min(maxNew, newFreq));
+      if(newFreq !== p.maintenanceFreq){
+        intervalOpt = {currentMin: p.maintenanceFreq, newMin: newFreq};
+      }
     }
-  } else if(Math.abs(diff) < 1){
+
+    // Lead with duration unless floor was hit
+    const leadOption = (durationOpt && !durationOpt.hitFloor) ? 'duration' : 'interval';
+    const reason = `Avg dryback ${r.avgDryback.toFixed(1)}% vs target ${target}% (${diff > 0 ? '+' : ''}${diff.toFixed(1)}%).`;
+    const text = dualOptionRec({leadOption, duration: durationOpt, interval: intervalOpt, reason});
+    if(text){
+      lines.push({sev:'action', text});
+    } else {
+      lines.push({sev:'ok', text:`✓ P2 cycling is on target — no adjustment needed.`});
+    }
+  } else {
     lines.push({sev:'ok', text:`✓ P2 cycling is on target — no adjustment needed.`});
   }
   return _tr_phaseBlockShell('P2 MAINTENANCE', scheduleSummary, 'Did P2 hold the target dryback?', lines);
@@ -10471,19 +10717,66 @@ function _tr_renderP0Block(a){
   const status = Math.abs(diff) < 2 ? '✓ on target' : (diff > 0 ? `${diff.toFixed(1)}% over target` : `${(-diff).toFixed(1)}% under target`);
   lines.push({sev:'data', text:`Measured: <b>${measured.toFixed(1)}%</b> (${status}) · target ${target}%`});
 
-  if(r.morningResatFired){
-    lines.push({sev:'action', text:`⚠ You fired a morning resaturation shot — overnight dried too far. <b>LENGTHEN the last ${phaseTermForRec} shot duration</b> or <b>push the ${phaseTermForRec} end time later</b> (currently ${endTimeForRec}).${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off — substrate has only P1 shots to land on.)</span>' : ''}`});
-  } else if(Math.abs(diff) >= 2){
-    if(diff > 0){
-      // Too deep — push P2 later or lengthen last shot
-      const extraSec = p.onePercentShotSize ? Math.round(diff * p.onePercentShotSize) : null;
-      const durHint = extraSec ? ` (~+${extraSec}s on the last ${phaseTermForRec} shot)` : '';
-      lines.push({sev:'action', text:`<b>PUSH last ${phaseTermForRec} shot later</b> (currently ${endTimeForRec}) or <b>LENGTHEN the last shot</b>${durHint}. Substrate dried ${diff.toFixed(1)}% too far.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
+  // Detect morning rescue — if team manually watered before lights-on,
+  // overnight dryback metric is "right" but the program clearly didn't
+  // carry the plant through the night. Bias the recommendation toward
+  // ADDING support, even if computed diff suggests otherwise.
+  const rescue = detectMorningRescue(a);
+
+  if(r.morningResatFired || rescue.fired){
+    // Build dual-option rec for "add support" (lengthen last shot OR add another).
+    // The shot we'd lengthen is the LAST phase shot (P1 last if P2 off, else P2 last).
+    const lastShotDurSec = p2IsOff ? p.durationSec : p.maintenanceDurationSec;
+    // We don't know exact VWC delta needed — use ~5% as a reasonable
+    // "add a meaningful resaturation shot's worth" heuristic.
+    const ASSUMED_DELTA = 5;
+    const durationChange = (lastShotDurSec && p.onePercentShotSize)
+      ? computeDurationChange(lastShotDurSec, ASSUMED_DELTA, p.onePercentShotSize)
+      : null;
+    const durationOpt = durationChange
+      ? {currentSec: lastShotDurSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+      : null;
+
+    const phaseQty = p2IsOff ? p.quantity : p.maintenanceQuantity;
+    const frequencyOpt = phaseQty ? {currentQty: phaseQty, newQty: phaseQty + 1} : null;
+
+    const leadOption = (durationOpt && !durationOpt.hitFloor) ? 'duration' : 'frequency';
+    const rescueCtx = rescue.fired
+      ? `Manual rescue fired at ${rescue.firstTime}${rescue.vwcDelta != null ? ' (+'+rescue.vwcDelta.toFixed(1)+'%)':''} — program left room under-supported.`
+      : `Morning resat fired automatically — overnight dried too far.`;
+    const reason = `Last ${phaseTermForRec} shot at ${endTimeForRec}.`;
+    const text = dualOptionRec({leadOption, duration: durationOpt, frequency: frequencyOpt, reason, rescueContext: rescueCtx});
+    if(text){
+      lines.push({sev:'action', text});
     } else {
-      // Too shallow — pull last P2 earlier or shorten
-      const cutSec = p.onePercentShotSize ? Math.round(-diff * p.onePercentShotSize) : null;
-      const durHint = cutSec ? ` (~-${cutSec}s on the last ${phaseTermForRec} shot)` : '';
-      lines.push({sev:'action', text:`<b>PULL last ${phaseTermForRec} shot earlier</b> (currently ${endTimeForRec}) or <b>SHORTEN the last shot</b>${durHint}. Substrate held ${(-diff).toFixed(1)}% more water than target.${p2IsOff ? ' <span style="color:var(--text3)">(P2 is off, so this is your last shot of the day.)</span>' : ''}`});
+      lines.push({sev:'action', text:`⚠ ${rescueCtx} Lengthen last ${phaseTermForRec} shot (currently ${endTimeForRec}) or add one.`});
+    }
+  } else if(Math.abs(diff) >= 2){
+    // No rescue, dryback miss only. Standard dual-option rec.
+    const lastShotDurSec = p2IsOff ? p.durationSec : p.maintenanceDurationSec;
+    const vwcDeltaNeeded = diff; // diff > 0 = dried too far → ADD water → positive delta
+    const durationChange = (lastShotDurSec && p.onePercentShotSize)
+      ? computeDurationChange(lastShotDurSec, vwcDeltaNeeded, p.onePercentShotSize)
+      : null;
+    const durationOpt = (durationChange && durationChange.newSec !== lastShotDurSec)
+      ? {currentSec: lastShotDurSec, newSec: durationChange.newSec, hitFloor: durationChange.hitFloor}
+      : null;
+
+    // For frequency: if dried too far → add a late shot. If held too much → pull last shot.
+    const phaseQty = p2IsOff ? p.quantity : p.maintenanceQuantity;
+    const frequencyOpt = phaseQty
+      ? {currentQty: phaseQty, newQty: phaseQty + (diff > 0 ? 1 : -1)}
+      : null;
+
+    const leadOption = (durationOpt && !durationOpt.hitFloor) ? 'duration' : 'frequency';
+    const reason = diff > 0
+      ? `Dried ${diff.toFixed(1)}% past target. Last ${phaseTermForRec} shot at ${endTimeForRec}.`
+      : `Held ${(-diff).toFixed(1)}% more than target. Last ${phaseTermForRec} shot at ${endTimeForRec}.`;
+    const text = dualOptionRec({leadOption, duration: durationOpt, frequency: frequencyOpt, reason});
+    if(text){
+      lines.push({sev:'action', text});
+    } else {
+      lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
     }
   } else {
     lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
