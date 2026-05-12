@@ -6249,28 +6249,42 @@ function measureActualPerShotDryback(a){
   return drops.reduce((s,v)=>s+v, 0) / drops.length;
 }
 
-// Get the per-shot during-day dryback for a table. Pull from program if
-// available (P2 maintenance dryback is the canonical "per cycle" dryback
-// for P1+P2 rooms), otherwise calculate from yesterday's measured data.
+// Get the per-shot during-day dryback for a table. Source depends on
+// which PHASE of the day's irrigation we're tuning:
 //
-// Returns { value, source } where source is 'program' or 'measured' or
-// null if neither is available.
-function getPerShotDryback(p, a){
-  // For P1+P2 rooms, p.maintenanceDryback is the configured per-cycle dryback
-  if(p && p.maintenanceDryback != null && !isCadenceMode(p)){
-    return { value: p.maintenanceDryback, source: 'program' };
+//   phase = 'p1'      : P1 climb. Inter-shot drybacks are small (~1-2%)
+//                       because the substrate is being ramped up, not held.
+//                       Pull from MEASURED yesterday data; fall back to 1.5%.
+//   phase = 'p2'      : P2 maintenance. Inter-shot drybacks equal the
+//                       program's maintenanceDryback (canonical setting).
+//   phase = 'cadence' : DD 2.2 cadence. Pull from measured, fall back to 1.5%.
+//
+// The old code unconditionally used maintenanceDryback for any shot in any
+// phase — producing the 185% daily budget catastrophe when applied to 18
+// P1 shots × 10% = 180%. That's mathematically impossible substrate
+// behavior. The phase parameter prevents this misapplication.
+//
+// Returns { value, source } where source is 'program' | 'measured' | 'default'
+// or null if no data available.
+function getPerShotDryback(p, a, phase){
+  if(phase === 'p2'){
+    // P2 phase: use the canonical program-configured dryback
+    if(p && p.maintenanceDryback != null){
+      return { value: p.maintenanceDryback, source: 'program' };
+    }
+    // No P2 program data? Fall back to measured
+    const measured = measureActualPerShotDryback(a);
+    if(measured != null){
+      return { value: measured, source: 'measured' };
+    }
+    return { value: 3, source: 'default' }; // 3% is mid-range for P2
   }
-  // Fall back to measured value from yesterday's data
+  // P1 or cadence: use measured value, fall back to 1.5% default
   const measured = measureActualPerShotDryback(a);
   if(measured != null){
     return { value: measured, source: 'measured' };
   }
-  // Last-resort default for cadence rooms (~1.5% per shot based on DD 2.2
-  // typical sawtooth amplitude observed in screenshots)
-  if(p && isCadenceMode(p)){
-    return { value: 1.5, source: 'default' };
-  }
-  return { value: null, source: null };
+  return { value: 1.5, source: 'default' };
 }
 
 // Compute the ideal shot duration based on the daily water budget model.
@@ -6282,11 +6296,13 @@ function getPerShotDryback(p, a){
 //   a              : table analysis (for measuring fallback per-shot dryback)
 //   shotCount      : number of shots in the phase (P1 quantity, or cadence N)
 //   overnightTarget: overnight dryback target % (e.g. 15% for DD 2.5)
-function computeDailyWaterBudget(p, a, shotCount, overnightTarget){
+function computeDailyWaterBudget(p, a, shotCount, overnightTarget, phase){
   if(!p || !p.onePercentShotSize || !shotCount || shotCount < 1) return null;
   if(overnightTarget == null) return null;
 
-  const drybackInfo = getPerShotDryback(p, a);
+  // Phase determines which dryback source to use — see getPerShotDryback.
+  // Default 'p1' if not specified (legacy callers).
+  const drybackInfo = getPerShotDryback(p, a, phase || 'p1');
   if(drybackInfo.value == null) return null;
 
   // dailyBudget = overnight dryback + (N-1) inter-shot drybacks
@@ -6311,9 +6327,9 @@ function computeDailyWaterBudget(p, a, shotCount, overnightTarget){
 // current duration so we never recommend a flooding shot — if the ideal is
 // beyond that ceiling, the caller is expected to fall back to frequency
 // steering.
-function computeDurationChange(p, a, shotCount, overnightTarget, currentSec){
+function computeDurationChange(p, a, shotCount, overnightTarget, currentSec, phase){
   if(!currentSec) return null;
-  const budget = computeDailyWaterBudget(p, a, shotCount, overnightTarget);
+  const budget = computeDailyWaterBudget(p, a, shotCount, overnightTarget, phase);
   if(!budget) return null;
 
   const idealSec = budget.idealDurationSec;
@@ -6460,12 +6476,15 @@ function detectMorningRescue(a){
   const cs = a.chartSeries;
   if(!cs || !cs.shotFires || !cs.shotFires.length) return { fired: false };
 
-  // Morning window = chart's winEnd (today lights-on UTC) - 6h ... + 30min
-  // This covers manual fires from ~2 AM CDT through ~8:30 AM CDT, which
-  // captures both true overnight rescues and morning-of resaturation.
+  // Morning window = chart's winEnd (today lights-on UTC) - 6h ... + 90min
+  // This covers manual fires from ~2 AM CDT through ~9:30 AM CDT. The
+  // +90min tail catches morning-of rescues fired AFTER lights-on but before
+  // the program's first scheduled shot has had time to ramp the substrate.
+  // Real example: Room 3 Table 1 (Day 49) had a 9:10 AM rescue that the
+  // original +30min window missed.
   const winEnd = cs.winEnd;
   const start = winEnd - 6 * 60 * 60 * 1000;
-  const end   = winEnd + 30 * 60 * 1000;
+  const end   = winEnd + 90 * 60 * 1000;
 
   const manuals = cs.shotFires.filter(s => {
     if(!s.isManual) return false;
@@ -10627,7 +10646,7 @@ function _tr_renderCadenceBlock(a){
     // (10–14%, midpoint 12%). Shot count is the program's current quantity.
     const overnightTargetForBudget = (DD_TARGETS.cadence.drybackMin + DD_TARGETS.cadence.drybackMax) / 2;
     const durationChange = (p.durationSec && p.onePercentShotSize && quantity)
-      ? computeDurationChange(p, a, quantity, overnightTargetForBudget, p.durationSec)
+      ? computeDurationChange(p, a, quantity, overnightTargetForBudget, p.durationSec, 'cadence')
       : null;
     const durationOpt = durationChange ? {
       currentSec: durationChange.currentSec,
@@ -10741,56 +10760,117 @@ function _tr_renderP1Block(a){
     const avgDiff = (avgEnd != null) ? avgEnd - target : null;
 
     if(p.rampUpShotSize && p.quantity && avgDiff != null){
-      if(Math.abs(avgDiff) >= 2){
-        // We need to close avgDiff% of VWC gap. Two viable levers:
-        //   Duration: change current shot length by (avgDiff × onePercentShotSize) sec
-        //   Frequency: change quantity by round(avgDiff ÷ rampUpShotSize) shots
-        // Per facility preference: duration leads, frequency is the alternate.
-        // Interval is NOT offered for P1 since changing P1 interval cascades
-        // into P2 schedule — too disruptive for a routine ramp adjustment.
+      // ────────────────────────────────────────────────────────
+      // P1 RECOMMENDATION — narrative format with rescue anchoring
+      // ────────────────────────────────────────────────────────
+      // Output is a single inline paragraph that:
+      //   1. Leads with the action ("Add 2 shots → 20 events")
+      //   2. Tells yesterday's story with timestamps for rescue events
+      //   3. Justifies the action based on what went wrong
+      //   4. When a rescue was detected, anchors math to SOP morning floor
+      //      (54%) instead of field capacity, because the rescue makes
+      //      field-cap data unreliable for that day
+      //
+      // Per user spec: "the rec should target what would have prevented
+      // the rescue" — meaning enough daily water budget that overnight
+      // dryback doesn't drop morning VWC below the rescue threshold.
 
-        // Compute ideal duration using the daily-water-budget model.
-        // overnightTarget pulled from program's overnightDrybackTarget,
-        // falling back to additionalDryback (older schema) and finally to
-        // a reasonable default of 15% if neither is set.
-        const overnightTargetForBudget = (p.overnightDrybackTarget != null
-          ? p.overnightDrybackTarget
-          : (p.additionalDryback != null ? p.additionalDryback : 15));
-        const durationChange = (p.durationSec && p.onePercentShotSize && p.quantity)
-          ? computeDurationChange(p, a, p.quantity, overnightTargetForBudget, p.durationSec)
-          : null;
-        const durationOpt = durationChange ? {
-          currentSec: durationChange.currentSec,
-          newSec: durationChange.newSec,
-          hitFloor: durationChange.hitFloor,
-          hitCeiling: durationChange.hitCeiling,
-          idealSec: durationChange.idealSec,
-          perShotPct: durationChange.perShotPct,
-          dailyBudgetPct: durationChange.dailyBudgetPct,
-          shotCount: durationChange.shotCount,
-          drybackSource: durationChange.drybackSource,
-        } : null;
+      const SOP_MORNING_FLOOR = 54; // Per DD 2.2 §9 — morning VWC band 54-57%
+      const rescue = detectMorningRescue(a);
+      const p2IsOff = (p.p2Active === false) || ((p.maintenanceQuantity || 0) === 0);
 
+      // Compute frequency option. When rescue detected, anchor to morning
+      // floor: total daily budget needed = (field_cap - morning_floor) +
+      // overnight_dryback. Distribute across N shots, compare to current
+      // delivery, recommend the shot count that closes the gap.
+      const overnightTargetForBudget = (p.overnightDrybackTarget != null
+        ? p.overnightDrybackTarget
+        : (p.additionalDryback != null ? p.additionalDryback : 15));
+
+      let frequencyOpt = null;
+      let recAnchor = 'fieldcap'; // 'fieldcap' or 'rescue'
+      let neededShots = p.quantity;
+      let dailyBudgetNeeded = null;
+
+      if(rescue.fired){
+        // RESCUE-ANCHORED math. The program failed to keep morning VWC
+        // above the rescue threshold, so target the SOP morning floor:
+        //   daily_budget_needed = field_cap_target - SOP_morning_floor + overnight_dryback
+        // Each shot delivers rampUpShotSize % VWC. Number of shots needed
+        // = daily_budget_needed / rampUpShotSize.
+        recAnchor = 'rescue';
+        dailyBudgetNeeded = target - SOP_MORNING_FLOOR + overnightTargetForBudget;
+        neededShots = Math.ceil(dailyBudgetNeeded / p.rampUpShotSize);
+        // Cap the adjustment to ±50% of current quantity to avoid wild swings
+        const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
+        neededShots = Math.max(p.quantity - maxAdjust, Math.min(p.quantity + maxAdjust, neededShots));
+      } else {
+        // FIELD-CAP-ANCHORED math (no rescue). Close the gap between
+        // current avg and target.
         let shotsToAdjust = Math.round(avgDiff / p.rampUpShotSize);
         const maxAdjust = Math.max(1, Math.round(p.quantity * 0.5));
         const cappedAdjust = Math.max(-maxAdjust, Math.min(maxAdjust, shotsToAdjust));
-        const newQty = Math.max(1, p.quantity - cappedAdjust);
-        const frequencyOpt = (cappedAdjust !== 0)
-          ? {currentQty: p.quantity, newQty}
-          : null;
+        neededShots = Math.max(1, p.quantity - cappedAdjust);
+      }
 
-        // If duration hit floor, fall to frequency-lead automatically per spec
-        const leadOption = (durationOpt && !durationOpt.hitFloor) ? 'duration' : 'frequency';
+      // Compute new last-shot fire time for narrative
+      const newLastShotTime = (neededShots !== p.quantity && p.rampStart && p.rampUpShotInterval)
+        ? shotFireTime(p.rampStart, neededShots, p.rampUpShotInterval)
+        : null;
 
-        const reason = `Table avg ${avgEnd.toFixed(1)}% vs target ${target}% (${avgDiff > 0 ? '+' : ''}${avgDiff.toFixed(1)}%).`;
-        const text = dualOptionRec({leadOption, duration: durationOpt, frequency: frequencyOpt, reason});
-        if(text){
-          lines.push({sev:'action', text});
-        } else {
-          lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
-        }
-      } else {
+      // Compute duration option for completeness — but in rescue-anchored
+      // recs we lead with frequency. Duration is offered only if it doesn't
+      // hit the floor.
+      const durationChange = (p.durationSec && p.onePercentShotSize && p.quantity)
+        ? computeDurationChange(p, a, p.quantity, overnightTargetForBudget, p.durationSec, 'p1')
+        : null;
+      const durationDelta = durationChange ? (durationChange.newSec - p.durationSec) : 0;
+
+      // ── Build the narrative ──
+      const fmtTimeFromRamp = (qty) => shotFireTime(p.rampStart, qty, p.rampUpShotInterval) || '?';
+
+      if(neededShots === p.quantity && !rescue.fired){
         lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
+      } else {
+        // Action sentence
+        let action;
+        if(neededShots > p.quantity){
+          const addCount = neededShots - p.quantity;
+          action = `<b>Add ${addCount} P1 shot${addCount>1?'s':''} → ${neededShots} events</b>${newLastShotTime ? ` (last shot ${newLastShotTime})` : ''}.`;
+        } else {
+          const removeCount = p.quantity - neededShots;
+          action = `<b>Remove ${removeCount} P1 shot${removeCount>1?'s':''} → ${neededShots} events</b>${newLastShotTime ? ` (last shot moves to ${newLastShotTime})` : ''}.`;
+        }
+
+        // Story: rescue first if applicable, then ramp behavior
+        const storyParts = [];
+        if(rescue.fired){
+          const deltaStr = rescue.vwcDelta != null ? `+${rescue.vwcDelta.toFixed(1)}% VWC` : 'big jump';
+          storyParts.push(`Manual rescue fired at <b>${rescue.firstTime}</b> (${deltaStr})${rescue.count > 1 ? ` plus ${rescue.count-1} more` : ''} — substrate was too dry overnight for the program to recover on its own.`);
+        }
+        // P1 endpoint summary
+        storyParts.push(`P1 fired ${p.quantity} shots from ${p.rampStart} ending ${p.rampEnd}, landing F at ${r.fEnd != null ? r.fEnd.toFixed(1) : '?'}% and B at ${r.bEnd != null ? r.bEnd.toFixed(1) : '?'}% (target ${target}%${avgDiff > 0 ? ', ' + avgDiff.toFixed(1) + '% over' : avgDiff < 0 ? ', ' + (-avgDiff).toFixed(1) + '% under' : ''}).`);
+        if(p2IsOff){
+          storyParts.push(`<span style="color:var(--amber)">P2 is off — no maintenance shots, so substrate drifts down all afternoon.</span>`);
+        }
+
+        // Justification
+        let justification;
+        if(rescue.fired){
+          justification = `With rescue counted in, today's data doesn't tell us where P1 lands on its own. Anchoring to <b>SOP morning floor (${SOP_MORNING_FLOOR}%)</b>: day needs ~${dailyBudgetNeeded.toFixed(0)}% total water (${target}% field cap − ${SOP_MORNING_FLOOR}% morning + ${overnightTargetForBudget}% overnight). At ${p.rampUpShotSize}%/shot, that's ~${neededShots} shots. <span style="color:var(--text3)">Don't increase duration — substrate already overshoots field cap when given enough water; the issue is total daily budget, not per-shot delivery.</span>`;
+        } else {
+          if(avgDiff > 0){
+            justification = `P1 overshooting field cap. Removing ${p.quantity - neededShots} shot${p.quantity - neededShots > 1 ? 's' : ''} brings total daily delivery down ~${((p.quantity - neededShots) * p.rampUpShotSize).toFixed(1)}%.`;
+          } else {
+            justification = `P1 falling short of field cap. Adding ${neededShots - p.quantity} shot${neededShots - p.quantity > 1 ? 's' : ''} adds ~${((neededShots - p.quantity) * p.rampUpShotSize).toFixed(1)}% more daily delivery.`;
+          }
+          if(durationChange && Math.abs(durationDelta) >= 2 && !durationChange.hitFloor){
+            justification += ` <span style="color:var(--text3)">Duration alternative: ${p.durationSec}s → ${durationChange.newSec}s.</span>`;
+          }
+        }
+
+        const fullText = `${action} ${storyParts.join(' ')} ${justification}`;
+        lines.push({sev:'action', text: fullText});
       }
     }
 
@@ -10883,7 +10963,7 @@ function _tr_renderP2Block(a){
       : (p.additionalDryback != null ? p.additionalDryback : 15));
     const totalShots = (p.quantity || 0) + (p.maintenanceQuantity || 0);
     const durationChange = (p.maintenanceDurationSec && p.onePercentShotSize && totalShots)
-      ? computeDurationChange(p, a, totalShots, overnightTargetForBudget, p.maintenanceDurationSec)
+      ? computeDurationChange(p, a, totalShots, overnightTargetForBudget, p.maintenanceDurationSec, 'p2')
       : null;
     const durationOpt = durationChange ? {
       currentSec: durationChange.currentSec,
@@ -10996,7 +11076,7 @@ function _tr_renderP0Block(a){
       : (p.additionalDryback != null ? p.additionalDryback : 15));
     const shotCountForBudget = p2IsOff ? (p.quantity || 0) : ((p.quantity || 0) + (p.maintenanceQuantity || 0));
     const durationChange = (lastShotDurSec && p.onePercentShotSize && shotCountForBudget)
-      ? computeDurationChange(p, a, shotCountForBudget, overnightTargetForBudget, lastShotDurSec)
+      ? computeDurationChange(p, a, shotCountForBudget, overnightTargetForBudget, lastShotDurSec, p2IsOff ? 'p1' : 'p2')
       : null;
     const durationOpt = durationChange ? {
       currentSec: durationChange.currentSec,
@@ -11030,7 +11110,7 @@ function _tr_renderP0Block(a){
     const lastShotDurSec = p2IsOff ? p.durationSec : p.maintenanceDurationSec;
     const shotCountForBudget = p2IsOff ? (p.quantity || 0) : ((p.quantity || 0) + (p.maintenanceQuantity || 0));
     const durationChange = (lastShotDurSec && p.onePercentShotSize && shotCountForBudget)
-      ? computeDurationChange(p, a, shotCountForBudget, target, lastShotDurSec)
+      ? computeDurationChange(p, a, shotCountForBudget, target, lastShotDurSec, p2IsOff ? 'p1' : 'p2')
       : null;
     const durationOpt = durationChange ? {
       currentSec: durationChange.currentSec,
