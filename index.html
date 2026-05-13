@@ -2009,15 +2009,28 @@ function _resolveAutoInVegRooms(){
     .map(rm => rm.id);
 }
 
-// Given a scope.rooms array that may contain the 'auto:in-veg' marker,
-// expand it into the actual list of room ids that the rule currently
-// applies to. Used by task generation (chunk 3) and by the UI summary line.
+// Parallel marker for flowering: "auto:in-flower" → any flower room whose
+// getStage() returns 'flower' or 'late' (i.e. post-flip, pre-harvest).
+// Used by flowering-tab rules so operators don't have to update room picks
+// when rooms flip in or finish a cycle.
+function _resolveAutoInFlowerRooms(){
+  return rooms
+    .filter(rm => rm.id && (getStage(rm) === 'flower' || getStage(rm) === 'late'))
+    .map(rm => rm.id);
+}
+
+// Given a scope.rooms array that may contain marker strings, expand them
+// into the actual list of room ids the rule currently applies to. Markers
+// are resolved fresh each call so flips automatically propagate.
+// Used by task generation (chunk 3) and by the UI summary line.
 function resolveRuleRooms(scopeRooms){
   if(!Array.isArray(scopeRooms)) return [];
   const expanded = new Set();
   scopeRooms.forEach(rid => {
     if(rid === 'auto:in-veg'){
       _resolveAutoInVegRooms().forEach(r => expanded.add(r));
+    } else if(rid === 'auto:in-flower'){
+      _resolveAutoInFlowerRooms().forEach(r => expanded.add(r));
     } else {
       expanded.add(rid);
     }
@@ -3148,9 +3161,10 @@ function _ruleScopeText(r){
   if(scopeRooms === 'all') return 'All rooms';
   if(!Array.isArray(scopeRooms) || !scopeRooms.length) return 'No rooms';
 
-  // Separate out the auto:in-veg marker for special rendering
+  // Separate out auto markers for special rendering
   const hasAutoVeg = scopeRooms.includes('auto:in-veg');
-  const explicitRooms = scopeRooms.filter(rid => rid !== 'auto:in-veg');
+  const hasAutoFlower = scopeRooms.includes('auto:in-flower');
+  const explicitRooms = scopeRooms.filter(rid => rid !== 'auto:in-veg' && rid !== 'auto:in-flower');
 
   const parts = [];
   if(hasAutoVeg){
@@ -3160,6 +3174,19 @@ function _ruleScopeText(r){
     } else {
       const autoNames = autoIds.map(rid => (rooms.find(r=>r.id===rid)||{}).name || rid);
       parts.push('🌱 in-veg: ' + autoNames.join(', '));
+    }
+  }
+  if(hasAutoFlower){
+    const autoIds = _resolveAutoInFlowerRooms();
+    if(autoIds.length === 0){
+      parts.push('🌸 in-flower (none right now)');
+    } else {
+      const autoNames = autoIds.map(rid => (rooms.find(r=>r.id===rid)||{}).name || rid);
+      if(autoNames.length <= 3){
+        parts.push('🌸 in-flower: ' + autoNames.join(', '));
+      } else {
+        parts.push('🌸 in-flower: ' + autoNames.slice(0, 2).join(', ') + ' + ' + (autoNames.length - 2) + ' more');
+      }
     }
   }
   if(explicitRooms.length){
@@ -3481,9 +3508,12 @@ function openUnifiedRuleEditor(ruleId){
   const isVegPhase = (_activeRulesTab === 'veg') || (r.scope && r.scope.phase === 'veg');
   const flowerRooms = rooms.filter(rm => rm.id);
   let ruleRooms = (r.scope && Array.isArray(r.scope.rooms)) ? r.scope.rooms : [];
-  // Auto-check the "in veg" group for brand-new veg rules
-  if(!editing && isVegPhase && ruleRooms.length === 0){
-    ruleRooms = ['auto:in-veg'];
+  // Auto-check the "in veg" group for brand-new veg rules and "in flower"
+  // group for brand-new flower rules. The chip is pre-checked so operators
+  // get the right default; they can uncheck it to target specific rooms.
+  if(!editing && ruleRooms.length === 0){
+    if(isVegPhase) ruleRooms = ['auto:in-veg'];
+    else ruleRooms = ['auto:in-flower'];
   }
 
   // The room picker shape depends on which tab/phase the rule belongs to.
@@ -3511,14 +3541,28 @@ function openUnifiedRuleEditor(ruleId){
 
     roomChecks = autoChip + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">'+supportChecks+'</div>';
   } else {
-    // Flower phase: original behavior. Show flower rooms + support rooms
-    // as a flat list of checkboxes.
-    const allRoomsForFlower = [...IPM_SUPPORT_ROOMS, ...flowerRooms];
-    roomChecks = allRoomsForFlower.map(rm => {
+    // Flower phase: auto:in-flower chip at top (pre-checked for new rules),
+    // then individual flower rooms beneath so a lead can target specific
+    // rooms (e.g. high-yield rooms) if needed. Support rooms (Mother, Veg,
+    // Clones, Dry) aren't shown here because they're veg-side.
+    const autoFlowerIds = _resolveAutoInFlowerRooms();
+    const autoFlowerLabel = autoFlowerIds.length === 0
+      ? 'All rooms currently in flower (none right now)'
+      : 'All rooms currently in flower (' + autoFlowerIds.length + ' room' + (autoFlowerIds.length===1?'':'s') + ': ' +
+        autoFlowerIds.map(rid => (rooms.find(r=>r.id===rid)||{}).name || rid).join(', ') + ')';
+    const autoFlowerChecked = ruleRooms.includes('auto:in-flower');
+    const autoFlowerChip = '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(autoFlowerChecked?'var(--green-bg)':'var(--bg3)')+';cursor:pointer;width:100%;box-sizing:border-box">'+
+           '<input type="checkbox" data-room="auto:in-flower" '+(autoFlowerChecked?'checked':'')+' style="margin:0"/>'+
+           '<span style="font-weight:600">🌸 '+autoFlowerLabel+'</span></label>';
+
+    // Individual flower rooms — for the "target specific rooms" override case
+    const flowerRoomChecks = flowerRooms.map(rm => {
       const checked = ruleRooms.includes(rm.id);
       return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
              '<input type="checkbox" data-room="'+rm.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+rm.name+'</label>';
     }).join('');
+
+    roomChecks = autoFlowerChip + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">'+flowerRoomChecks+'</div>';
   }
 
   const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -3575,7 +3619,7 @@ function openUnifiedRuleEditor(ruleId){
     '<div style="font-size:10px;color:var(--text3);margin-top:5px;font-style:italic">'+
       (isVegPhase
         ? 'The green "in veg" group auto-tracks which flower rooms are currently pre-flip. As a room flips to flower, it drops out of this list. Pick permanent rooms (Mother, Veg, Clones, Dry) separately.'
-        : 'Select the flower rooms this rule applies to.')+
+        : 'The green "in flower" group auto-tracks which rooms are currently in flower (post-flip, pre-harvest). For most rules leave this checked. Uncheck and pick individual rooms only if you want this rule limited to specific rooms (e.g. high-yield rooms only).')+
     '</div></div>'+
 
     // Cadence type selector
