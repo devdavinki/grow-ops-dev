@@ -1996,6 +1996,35 @@ function getIpmRoom(id){
   return rooms.find(r=>r.id===id) || IPM_SUPPORT_ROOMS.find(r=>r.id===id) || null;
 }
 
+// "auto:in-veg" pseudo-room marker — used in rule scope.rooms to mean
+// "whatever flower rooms are currently in vegetative stage." Resolved live
+// at render and task-generation time so the room list auto-updates when
+// rooms flip in/out of veg without anyone having to edit the rule.
+//
+// Returns array of room ids (e.g. ['r11']) for any flower room whose
+// getStage() currently returns 'veg' (typically pre-flip, fd < 1).
+function _resolveAutoInVegRooms(){
+  return rooms
+    .filter(rm => rm.id && getStage(rm) === 'veg')
+    .map(rm => rm.id);
+}
+
+// Given a scope.rooms array that may contain the 'auto:in-veg' marker,
+// expand it into the actual list of room ids that the rule currently
+// applies to. Used by task generation (chunk 3) and by the UI summary line.
+function resolveRuleRooms(scopeRooms){
+  if(!Array.isArray(scopeRooms)) return [];
+  const expanded = new Set();
+  scopeRooms.forEach(rid => {
+    if(rid === 'auto:in-veg'){
+      _resolveAutoInVegRooms().forEach(r => expanded.add(r));
+    } else {
+      expanded.add(rid);
+    }
+  });
+  return [...expanded];
+}
+
 // ══════════════════════════════════════════════
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
@@ -3115,12 +3144,34 @@ function _ruleCadenceText(r){
 
 // Build a human-readable scope (rooms) string
 function _ruleScopeText(r){
-  const rooms = (r.scope && r.scope.rooms) || [];
-  if(rooms === 'all') return 'All rooms';
-  if(!Array.isArray(rooms) || !rooms.length) return 'No rooms';
-  const names = rooms.map(rid => (getIpmRoom(rid) || {name: rid}).name);
-  if(names.length <= 3) return names.join(', ');
-  return names.slice(0, 2).join(', ') + ' + ' + (names.length - 2) + ' more';
+  const scopeRooms = (r.scope && r.scope.rooms) || [];
+  if(scopeRooms === 'all') return 'All rooms';
+  if(!Array.isArray(scopeRooms) || !scopeRooms.length) return 'No rooms';
+
+  // Separate out the auto:in-veg marker for special rendering
+  const hasAutoVeg = scopeRooms.includes('auto:in-veg');
+  const explicitRooms = scopeRooms.filter(rid => rid !== 'auto:in-veg');
+
+  const parts = [];
+  if(hasAutoVeg){
+    const autoIds = _resolveAutoInVegRooms();
+    if(autoIds.length === 0){
+      parts.push('🌱 in-veg (none right now)');
+    } else {
+      const autoNames = autoIds.map(rid => (rooms.find(r=>r.id===rid)||{}).name || rid);
+      parts.push('🌱 in-veg: ' + autoNames.join(', '));
+    }
+  }
+  if(explicitRooms.length){
+    const names = explicitRooms.map(rid => (getIpmRoom(rid) || {name: rid}).name);
+    if(names.length <= 3){
+      parts.push(names.join(', '));
+    } else {
+      parts.push(names.slice(0, 2).join(', ') + ' + ' + (names.length - 2) + ' more');
+    }
+  }
+
+  return parts.join(' + ');
 }
 
 // Render a single rule card. canEdit=false → lock icon + disabled buttons.
@@ -3310,23 +3361,34 @@ function toggleUnifiedRule(ruleId){
 function _syncUnifiedToLegacy(){
   const all = getUserRules();
   // IPM rules: anything category:'ipm' becomes a legacy ipm rule
-  const ipmEntries = all.filter(r => r.category === 'ipm').map(r => ({
-    id: r.id,
-    name: r.name || '',
-    product: r.product || '',
-    dose: r.dose || '',
-    rooms: Array.isArray(r.scope?.rooms) ? r.scope.rooms : (r.scope?.rooms === 'all' ? [] : []),
-    cadenceType: r.cadenceType || 'every_n',
-    every: r.every || 1,
-    weekdays: r.weekdays || [],
-    dates: r.dates || [],
-    startDate: r.startDate || null,
-    active: r.active !== false,
-    notes: r.notes || '',
-    createdBy: r.createdBy || 'unknown',
-    createdAt: r.createdAt || null,
-    updatedAt: r.updatedAt || null,
-  }));
+  const ipmEntries = all.filter(r => r.category === 'ipm').map(r => {
+    // Expand auto:in-veg into the current set of in-veg flower rooms when
+    // writing to legacy. The task-generation code reads rule.rooms directly
+    // and doesn't understand auto markers, so we resolve here. The downside
+    // is that as rooms flip in/out of veg, the legacy mirror gets stale
+    // until the next save/pull triggers another _syncUnifiedToLegacy call.
+    // Acceptable for chunk 2.5 since flips are infrequent and chunk 3
+    // will rewrite task generation to read from the unified store directly.
+    const rawRooms = Array.isArray(r.scope?.rooms) ? r.scope.rooms : [];
+    const resolvedRooms = resolveRuleRooms(rawRooms);
+    return {
+      id: r.id,
+      name: r.name || '',
+      product: r.product || '',
+      dose: r.dose || '',
+      rooms: resolvedRooms,
+      cadenceType: r.cadenceType || 'every_n',
+      every: r.every || 1,
+      weekdays: r.weekdays || [],
+      dates: r.dates || [],
+      startDate: r.startDate || null,
+      active: r.active !== false,
+      notes: r.notes || '',
+      createdBy: r.createdBy || 'unknown',
+      createdAt: r.createdAt || null,
+      updatedAt: r.updatedAt || null,
+    };
+  });
   S('wg_ipm_rules', ipmEntries);
   sessionStorage.setItem('wg_ipm_rules_dirty', '1');
   // Update the global ipmRules variable too (some readers use it directly)
@@ -3413,14 +3475,51 @@ function openUnifiedRuleEditor(ruleId){
   }
 
   // Build the rooms checklist
+  // Build phase-appropriate room picker. Auto-default for new veg rules
+  // is to pre-check the auto:in-veg marker so the operator doesn't have
+  // to remember to do it manually.
+  const isVegPhase = (_activeRulesTab === 'veg') || (r.scope && r.scope.phase === 'veg');
   const flowerRooms = rooms.filter(rm => rm.id);
-  const allRooms = [...IPM_SUPPORT_ROOMS, ...flowerRooms];
-  const ruleRooms = (r.scope && Array.isArray(r.scope.rooms)) ? r.scope.rooms : [];
-  const roomChecks = allRooms.map(rm => {
-    const checked = ruleRooms.includes(rm.id);
-    return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
-           '<input type="checkbox" data-room="'+rm.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+rm.name+'</label>';
-  }).join('');
+  let ruleRooms = (r.scope && Array.isArray(r.scope.rooms)) ? r.scope.rooms : [];
+  // Auto-check the "in veg" group for brand-new veg rules
+  if(!editing && isVegPhase && ruleRooms.length === 0){
+    ruleRooms = ['auto:in-veg'];
+  }
+
+  // The room picker shape depends on which tab/phase the rule belongs to.
+  let roomChecks;
+  if(isVegPhase){
+    // Veg phase: auto group at top, then permanent support rooms. Flower
+    // rooms aren't shown individually since auto:in-veg covers them
+    // dynamically. Show the current resolution count next to the auto chip
+    // so operators see what it means right now.
+    const autoRoomIds = _resolveAutoInVegRooms();
+    const autoLabel = autoRoomIds.length === 0
+      ? 'All rooms currently in veg (none right now)'
+      : 'All rooms currently in veg (' + autoRoomIds.length + ' room' + (autoRoomIds.length===1?'':'s') + ': ' +
+        autoRoomIds.map(rid => (rooms.find(r=>r.id===rid)||{}).name || rid).join(', ') + ')';
+    const autoChecked = ruleRooms.includes('auto:in-veg');
+    const autoChip = '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(autoChecked?'var(--green-bg)':'var(--bg3)')+';cursor:pointer;width:100%;box-sizing:border-box">'+
+           '<input type="checkbox" data-room="auto:in-veg" '+(autoChecked?'checked':'')+' style="margin:0"/>'+
+           '<span style="font-weight:600">🌱 '+autoLabel+'</span></label>';
+
+    const supportChecks = IPM_SUPPORT_ROOMS.map(rm => {
+      const checked = ruleRooms.includes(rm.id);
+      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+             '<input type="checkbox" data-room="'+rm.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+rm.name+'</label>';
+    }).join('');
+
+    roomChecks = autoChip + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">'+supportChecks+'</div>';
+  } else {
+    // Flower phase: original behavior. Show flower rooms + support rooms
+    // as a flat list of checkboxes.
+    const allRoomsForFlower = [...IPM_SUPPORT_ROOMS, ...flowerRooms];
+    roomChecks = allRoomsForFlower.map(rm => {
+      const checked = ruleRooms.includes(rm.id);
+      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+             '<input type="checkbox" data-room="'+rm.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+rm.name+'</label>';
+    }).join('');
+  }
 
   const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const weekdayChecks = dayLabels.map((lbl,i) => {
@@ -3470,10 +3569,14 @@ function openUnifiedRuleEditor(ruleId){
     '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Dose / mix</label>'+
     '<input id="ur-dose" value="'+(r.dose||'').replace(/"/g,'&quot;')+'" placeholder="1 tsp/gal" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div></div>'+
 
-    // Rooms (hidden when scope phase is 'veg' since 'all veg rooms' is implicit)
+    // Rooms — phase-aware. Veg tab shows auto-group + permanent support rooms.
     '<div id="ur-rooms-row"><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Rooms</label>'+
-    '<div id="ur-rooms" style="display:flex;flex-wrap:wrap;gap:5px">'+roomChecks+'</div>'+
-    '<div style="font-size:10px;color:var(--text3);margin-top:5px;font-style:italic">For veg-phase rules, applies to any room in veg regardless of selection.</div></div>'+
+    '<div id="ur-rooms" style="display:flex;flex-direction:column;gap:5px">'+roomChecks+'</div>'+
+    '<div style="font-size:10px;color:var(--text3);margin-top:5px;font-style:italic">'+
+      (isVegPhase
+        ? 'The green "in veg" group auto-tracks which flower rooms are currently pre-flip. As a room flips to flower, it drops out of this list. Pick permanent rooms (Mother, Veg, Clones, Dry) separately.'
+        : 'Select the flower rooms this rule applies to.')+
+    '</div></div>'+
 
     // Cadence type selector
     '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Cadence</label>'+
@@ -3570,13 +3673,21 @@ function saveUnifiedRuleFromEditor(ruleId){
     if(btn && btn.style.background === 'var(--blue-bg)') cadenceType = t;
   });
 
-  // Phase is IMPLICIT — derived from the active tab. The editor doesn't
-  // let the user pick phase; that's controlled by where the editor was opened.
-  // Edit on existing rule preserves its existing phase.
+  // Phase is IMPLICIT — derived from the active tab for NEW rules, or
+  // preserved from the existing rule on edits.
+  //
+  // The check is: does a rule with this id actually exist in storage right
+  // now? If yes, treat as edit and preserve existing phase. If no (the id
+  // was freshly generated by openUnifiedRuleEditor for a new rule), use
+  // the active tab's phase.
+  //
+  // This fixes the bug where new rules created from the Veg tab landed
+  // on the Flowering tab because `ruleId` was truthy (a fresh id) but
+  // no existing rule matched, so the lookup fell back to 'flower'.
   let phase;
-  if(ruleId){
-    const existing = getRules().find(r => r.id === ruleId);
-    phase = (existing && existing.scope && existing.scope.phase) || 'flower';
+  const existingRule = ruleId ? getRules().find(r => r.id === ruleId) : null;
+  if(existingRule){
+    phase = (existingRule.scope && existingRule.scope.phase) || 'flower';
   } else {
     phase = (_activeRulesTab === 'veg') ? 'veg' : 'flower';
   }
