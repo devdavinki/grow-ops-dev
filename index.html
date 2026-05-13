@@ -2803,6 +2803,10 @@ function _buildBakedRules(){
 function saveUserRules(rules){
   S(RULES_KEY, rules);
   sessionStorage.setItem('wg_rules_dirty', '1');
+  // Track time of last edit so the cloud-pull handler can suppress overwrites
+  // during the propagation window. Without this, a pull right after a save
+  // can see stale cloud `[]` and wipe the edit before it propagates.
+  sessionStorage.setItem('wg_rules_last_edit', String(Date.now()));
 }
 
 // One-time migration from wg_ipm_rules → wg_rules_v1. Runs at script load.
@@ -2859,6 +2863,9 @@ function migrateRulesV1(){
 // Called from the existing save paths via a small monkey-patch later in
 // the file. Centralized here so the translation logic stays in one place.
 function _syncLegacyToUnified(){
+  // Stamp the last-edit time so cloud-pull suppresses overwrites during
+  // the propagation window for legacy IPM saves too.
+  sessionStorage.setItem('wg_rules_last_edit', String(Date.now()));
   const legacy = L(RULES_LEGACY_KEY, []);
   const current = L(RULES_KEY, []);
   // Strip baked from current (shouldn't be persisted anyway, but defensive)
@@ -10549,11 +10556,26 @@ async function pullConfigFromCloud(silent=false){
       S('wg_cal_events', calendarEvents);
     }
     if(d.flowerSchedule&&Array.isArray(d.flowerSchedule)){
-      // Cloud is authoritative for flower schedule. Dirty-flag push protects
-      // against stale-device clobbers.
-      flowerSchedule = d.flowerSchedule;
-      S('wg_flower_schedule', flowerSchedule);
-      _syncFlowerScheduleToUnified(); // bridge: mirror cloud pull into unified store
+      // Same cloud-overwrite guards as ipmRules (see below) — recent-edit
+      // window and stale-empty protection prevent transient cloud `[]`
+      // states from wiping local flower-schedule entries.
+      const lastEditTs = parseInt(sessionStorage.getItem('wg_rules_last_edit') || '0');
+      const recentEdit = lastEditTs && (Date.now() - lastEditTs) < 10000;
+      const cloudEmpty = d.flowerSchedule.length === 0;
+      const localFs = L('wg_flower_schedule', []);
+      const localHasFs = Array.isArray(localFs) && localFs.length > 0;
+      const staleEmpty = cloudEmpty && localHasFs;
+
+      if(recentEdit){
+        if(!silent) console.log('[FlowerSchedule] Skipping cloud overwrite — recent edit window.');
+      } else if(staleEmpty){
+        if(!silent) console.log('[FlowerSchedule] Skipping cloud overwrite — local has '+localFs.length+' entries, cloud is empty.');
+        sessionStorage.setItem('wg_flower_schedule_dirty', '1'); // queue re-push
+      } else {
+        flowerSchedule = d.flowerSchedule;
+        S('wg_flower_schedule', flowerSchedule);
+        _syncFlowerScheduleToUnified(); // bridge: mirror cloud pull into unified store
+      }
       // If Settings is currently open, refresh the editor so changes appear
       if(typeof renderFlowerScheduleEditor==='function' && document.getElementById('flower-schedule-editor')){
         renderFlowerScheduleEditor();
@@ -10564,18 +10586,45 @@ async function pullConfigFromCloud(silent=false){
       }
     }
     if(d.ipmRules&&Array.isArray(d.ipmRules)){
-      // Cloud is authoritative for the rules list. The "skip-empty push" guard in
-      // pushConfigToCloud prevents devices with empty local from accidentally
-      // wiping cloud, so this overwrite is safe.
-      // Critical: trusting cloud is what makes deletions propagate — if we merged
-      // by id, a rule deleted on one device would resurrect from another device's
-      // stale local copy.
-      ipmRules = d.ipmRules;
-      S('wg_ipm_rules', ipmRules);
-      _syncLegacyToUnified(); // bridge: mirror cloud pull into unified store
-      // Re-render if the IPM page is currently open
+      // Cloud-overwrite guards. We need to balance two opposing concerns:
+      //   (a) Trust cloud so deletions on one device propagate to others
+      //   (b) Don't let stale cloud `[]` wipe local rules during the brief
+      //       window between push and propagation
+      //
+      // Guard 1 — RECENT EDIT WINDOW: if we pushed a rule edit in the last
+      // 10 seconds, suppress the overwrite. Cloud hasn't necessarily caught
+      // up yet; trust local for now and let the next pull (post-propagation)
+      // reconcile.
+      const lastEditTs = parseInt(sessionStorage.getItem('wg_rules_last_edit') || '0');
+      const recentEdit = lastEditTs && (Date.now() - lastEditTs) < 10000;
+      // Guard 2 — STALE EMPTY: if cloud is empty but local has rules, that's
+      // a stale-cloud signal (probably our own push hasn't propagated yet, or
+      // an old buggy device pushed `[]` before chunk 1's push protection
+      // existed). Keep local; the next push will heal cloud.
+      const cloudEmpty = d.ipmRules.length === 0;
+      const localRules = L('wg_ipm_rules', []);
+      const localHasRules = Array.isArray(localRules) && localRules.length > 0;
+      const staleEmpty = cloudEmpty && localHasRules;
+
+      if(recentEdit){
+        if(!silent) console.log('[Rules] Skipping cloud overwrite — last edit was '+Math.round((Date.now()-lastEditTs)/1000)+'s ago, cloud may not have propagated yet.');
+      } else if(staleEmpty){
+        if(!silent) console.log('[Rules] Skipping cloud overwrite — cloud is empty but local has '+localRules.length+' rule(s). Cloud is likely stale; next push will heal it.');
+        // Mark dirty so the next push cycle re-uploads local. Without this,
+        // a stale cloud `[]` could persist forever because no one pushes.
+        sessionStorage.setItem('wg_ipm_rules_dirty', '1');
+      } else {
+        // Safe to trust cloud (either non-empty, or local is also empty).
+        ipmRules = d.ipmRules;
+        S('wg_ipm_rules', ipmRules);
+        _syncLegacyToUnified(); // bridge: mirror cloud pull into unified store
+      }
+      // Always re-render to surface any changes from above
       if(typeof renderIpmRules==='function' && document.getElementById('page-ipm') && document.getElementById('page-ipm').classList.contains('active')){
         renderIpmRules();
+      }
+      if(typeof renderUnifiedRules === 'function' && document.getElementById('page-rules') && document.getElementById('page-rules').classList.contains('active')){
+        renderUnifiedRules();
       }
     }
     if(d.ipmLog&&Array.isArray(d.ipmLog)){
