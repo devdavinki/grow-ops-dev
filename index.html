@@ -716,7 +716,7 @@ button { cursor: pointer; }
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
       <div>
         <h1 style="font-size:22px;font-weight:700;margin:0">Rules</h1>
-        <div style="font-size:12px;color:var(--text2);margin-top:3px">All scheduled tasks in one place — IPM sprays, additive schedule, flower-day events, veg reminders.</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:3px">Scheduled tasks by phase. Each rule has a type — IPM, Defol, Reminder, Additive, or Other.</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button onclick="pullConfigFromCloud(false).then(()=>renderUnifiedRules())" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
@@ -724,19 +724,19 @@ button { cursor: pointer; }
       </div>
     </div>
 
-    <!-- Sub-tab: Rules list vs History -->
-    <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid var(--border)">
-      <button class="nav-tab active" id="rules-subtab-list" onclick="showRulesSubtab('list',this)" style="font-size:12px">Rules</button>
-      <button class="nav-tab" id="rules-subtab-history" onclick="showRulesSubtab('history',this)" style="font-size:12px">History</button>
+    <!-- Phase sub-tabs: Vegetative / Flowering / Additives, plus History -->
+    <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--border)">
+      <button class="nav-tab" id="rules-tab-veg" onclick="showRulesTab('veg',this)" style="font-size:12px">🌱 Vegetative</button>
+      <button class="nav-tab active" id="rules-tab-flower" onclick="showRulesTab('flower',this)" style="font-size:12px">🌸 Flowering</button>
+      <button class="nav-tab" id="rules-tab-additives" onclick="showRulesTab('additives',this)" style="font-size:12px">💧 Additives</button>
+      <button class="nav-tab" id="rules-tab-history" onclick="showRulesTab('history',this)" style="font-size:12px;margin-left:auto">History</button>
     </div>
 
-    <!-- LIST sub-tab — section-based layout -->
-    <div id="rules-sub-list">
-      <div id="rules-sections"></div>
-    </div>
+    <!-- Current active tab is rendered into this single container -->
+    <div id="rules-tab-content"></div>
 
-    <!-- HISTORY sub-tab — reuses existing renderIpmHistory output -->
-    <div id="rules-sub-history" style="display:none">
+    <!-- History view (kept separately because it has its own filter UI) -->
+    <div id="rules-history-view" style="display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--text2)">All sprays + skips. Most recent first.</div>
         <select id="ipm-history-filter" onchange="renderIpmHistory()" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
@@ -3037,12 +3037,56 @@ const RULE_CATEGORY_COLORS = {
   'other':         { pill: 'background:rgba(100,116,139,0.15);color:#64748b',border: 'var(--text3)' },
 };
 
-function showRulesSubtab(tab, btn){
-  document.querySelectorAll('#page-rules .nav-tab').forEach(b=>b.classList.remove('active'));
+// ── Type badges — replaces category-based pills from chunk 2 ──
+const RULE_TYPE_LABELS = {
+  'ipm':       'IPM',
+  'defol':     'Defol',
+  'reminder':  'Reminder',
+  'additive':  'Additive',
+  'other':     'Other',
+};
+const RULE_TYPE_COLORS = {
+  'ipm':      { pill: 'background:rgba(59,130,246,0.15);color:#3b82f6',  border: 'var(--blue,#3b82f6)' },
+  'defol':    { pill: 'background:rgba(245,158,11,0.15);color:#f59e0b',  border: 'var(--amber)' },
+  'reminder': { pill: 'background:rgba(168,85,247,0.15);color:#a855f7',  border: 'var(--purple,#a855f7)' },
+  'additive': { pill: 'background:rgba(34,197,94,0.15);color:#22c55e',   border: 'var(--green)' },
+  'other':    { pill: 'background:rgba(100,116,139,0.15);color:#64748b', border: 'var(--text3)' },
+};
+
+// Resolve a rule's `type` field, falling back to derive it from `category`
+// for any rule that was created before chunk 2.5. Old rules:
+//   category:'ipm'          → type:'ipm'
+//   category:'additive'     → type:'additive'
+//   category:'flower-event' → type:'reminder'
+//   category:'veg'          → type:'reminder'
+//   anything else           → type:'other'
+function _resolveRuleType(r){
+  if(r.type) return r.type;
+  if(r.category === 'ipm') return 'ipm';
+  if(r.category === 'additive') return 'additive';
+  if(r.category === 'flower-event') return 'reminder';
+  if(r.category === 'veg') return 'reminder';
+  return 'other';
+}
+
+// Show one of the three phase sub-tabs, or the History view.
+let _activeRulesTab = 'flower';
+function showRulesTab(tab, btn){
+  _activeRulesTab = tab;
+  // Highlight the clicked button, clear the others
+  document.querySelectorAll('#page-rules .nav-tab').forEach(b => b.classList.remove('active'));
   if(btn) btn.classList.add('active');
-  document.getElementById('rules-sub-list').style.display    = tab==='list'    ? 'block' : 'none';
-  document.getElementById('rules-sub-history').style.display = tab==='history' ? 'block' : 'none';
-  if(tab==='history' && typeof renderIpmHistory === 'function') renderIpmHistory();
+  const content = document.getElementById('rules-tab-content');
+  const historyView = document.getElementById('rules-history-view');
+  if(tab === 'history'){
+    if(content) content.style.display = 'none';
+    if(historyView) historyView.style.display = 'block';
+    if(typeof renderIpmHistory === 'function') renderIpmHistory();
+    return;
+  }
+  if(content) content.style.display = 'block';
+  if(historyView) historyView.style.display = 'none';
+  renderUnifiedRules();
 }
 
 // Build a human-readable cadence string for a rule
@@ -3081,12 +3125,12 @@ function _ruleScopeText(r){
 
 // Render a single rule card. canEdit=false → lock icon + disabled buttons.
 function _renderRuleCard(r, canEdit){
-  const cat = RULE_CATEGORY_COLORS[r.category] || RULE_CATEGORY_COLORS.other;
-  const isLeadOverride = r.source === 'baked' && canEdit;
-  const borderColor = r.active ? cat.border : 'var(--text3)';
+  const type = _resolveRuleType(r);
+  const typeStyle = RULE_TYPE_COLORS[type] || RULE_TYPE_COLORS.other;
+  const borderColor = r.active ? typeStyle.border : 'var(--text3)';
   const opacity = r.active ? '' : 'opacity:0.6;';
   const lockIcon = r.source === 'baked' ? '<span title="Baked-in — built into the app" style="font-size:11px;color:var(--text3)">🔒</span> ' : '';
-  const catPill = '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);font-weight:600;'+cat.pill+'">'+(RULE_CATEGORY_LABELS[r.category]||r.category)+'</span>';
+  const typePill = '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);font-weight:600;'+typeStyle.pill+'">'+(RULE_TYPE_LABELS[type]||type)+'</span>';
   const productPill = r.product ? '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:rgba(168,85,247,0.15);color:var(--purple,#a855f7);font-weight:600">'+r.product+'</span>' : '';
   const pausedPill = !r.active ? '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:var(--bg3);color:var(--text3);font-weight:600">paused</span>' : '';
   const cadenceText = _ruleCadenceText(r);
@@ -3103,7 +3147,7 @@ function _renderRuleCard(r, canEdit){
     '<div style="flex:1;min-width:200px">'+
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
     '<div style="font-size:14px;font-weight:700;color:var(--text)">'+lockIcon+(r.name||'(unnamed)')+'</div>'+
-    catPill + productPill + pausedPill +
+    typePill + productPill + pausedPill +
     '</div>'+
     '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+scopeText+' · '+cadenceText+'</div>'+
     doseLine + notesLine +
@@ -3113,58 +3157,79 @@ function _renderRuleCard(r, canEdit){
     '</div></div></div>';
 }
 
-// Render one section header + list
-function _renderRuleSection(title, subtitle, rules, canEditBaked){
-  const list = rules.length
-    ? rules.map(r => _renderRuleCard(r, canEditBaked || r.source === 'user')).join('')
-    : '<div style="font-size:12px;color:var(--text3);font-style:italic;padding:14px;text-align:center;border:1px dashed var(--border2);border-radius:var(--r)">No rules in this section yet.</div>';
-  return '<div style="margin-bottom:24px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:6px">'+
-    '<div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:var(--text)">'+title+' <span style="font-size:11px;font-weight:500;color:var(--text3)">('+rules.length+')</span></div>'+
-    (subtitle ? '<div style="font-size:11px;color:var(--text3)">'+subtitle+'</div>' : '')+
-    '</div>'+
-    list +
-    '</div>';
+// Filter the rule list to a phase. A rule belongs to a phase if:
+//   - its scope.phase matches the active tab, OR
+//   - scope.phase is 'any' (shows in both veg and flower)
+// Additives use category not phase (additives tab shows category:'additive'
+// regardless of scope.phase, which is always 'flower' for additives anyway).
+function _filterRulesForTab(rules, tab){
+  if(tab === 'additives'){
+    return rules.filter(r => r.category === 'additive');
+  }
+  if(tab === 'veg'){
+    return rules.filter(r =>
+      r.category !== 'additive' &&
+      (r.scope?.phase === 'veg' || r.scope?.phase === 'any')
+    );
+  }
+  if(tab === 'flower'){
+    return rules.filter(r =>
+      r.category !== 'additive' &&
+      (r.scope?.phase === 'flower' || r.scope?.phase === 'any')
+    );
+  }
+  return [];
 }
 
 function renderUnifiedRules(){
-  const wrap = document.getElementById('rules-sections');
+  const wrap = document.getElementById('rules-tab-content');
   if(!wrap) return;
+  // If History view is active, nothing to render here
+  if(_activeRulesTab === 'history') return;
+
   const allRules = getRules();
-
-  // Permission: leads can override baked-in entries
   const canEditBaked = loggedInMember && loggedInMember.role === 'lead';
+  const filtered = _filterRulesForTab(allRules, _activeRulesTab);
 
-  // Partition rules into 4 sections
-  const flowerIpm = allRules.filter(r =>
-    r.category === 'ipm' && (r.scope?.phase === 'flower' || r.scope?.phase === 'any')
-  );
-  const flowerAdditive = allRules.filter(r => r.category === 'additive');
-  const flowerDayEvents = allRules.filter(r => r.category === 'flower-event');
-  const veg = allRules.filter(r =>
-    r.scope?.phase === 'veg' || r.category === 'veg' ||
-    (r.category === 'ipm' && Array.isArray(r.scope?.rooms) && r.scope.rooms.includes('veg'))
-  );
-  // Sort each section: active first, then by name
-  const sortRules = arr => arr.sort((a,b) => {
+  // Sort: active first, baked before user within same state, alphabetical
+  filtered.sort((a, b) => {
     if(a.active !== b.active) return a.active ? -1 : 1;
-    if(a.source !== b.source) return a.source === 'baked' ? -1 : 1; // baked first within same active state
+    if(a.source !== b.source) return a.source === 'baked' ? -1 : 1;
     return (a.name || '').localeCompare(b.name || '');
   });
-  [flowerIpm, flowerAdditive, flowerDayEvents, veg].forEach(sortRules);
+  // Additives tab is special: sort by flower day chronologically
+  if(_activeRulesTab === 'additives'){
+    filtered.sort((a, b) => {
+      const aDay = (a.flowerDays && a.flowerDays[0]) || a.dayStart || 999;
+      const bDay = (b.flowerDays && b.flowerDays[0]) || b.dayStart || 999;
+      return aDay - bDay;
+    });
+  }
 
-  // Sort additives chronologically by flower day so the schedule reads top-to-bottom
-  flowerAdditive.sort((a, b) => {
-    const aDay = (a.flowerDays && a.flowerDays[0]) || 999;
-    const bDay = (b.flowerDays && b.flowerDays[0]) || 999;
-    return aDay - bDay;
-  });
+  const tabLabels = {
+    veg: '🌱 Vegetative rules',
+    flower: '🌸 Flowering rules',
+    additives: '💧 Additive schedule',
+  };
+  const tabSubtitles = {
+    veg: 'Apply to any room in vegetative phase. Veg duration varies so rules use weekday/interval cadences.',
+    flower: 'Apply to flowering rooms. Mix of IPM, defol, and reminders.',
+    additives: 'Day-specific additives per Resin OS SOP. Baked entries (🔒) can be overridden by leads.',
+  };
+  const ruleCount = filtered.length;
 
-  wrap.innerHTML =
-    _renderRuleSection('FLOWER — IPM SPRAYS', 'Spray rotations for flower rooms', flowerIpm, canEditBaked) +
-    _renderRuleSection('FLOWER — ADDITIVE SCHEDULE', 'Tier 2 additives by flower day. Baked entries follow Resin OS SOP.', flowerAdditive, canEditBaked) +
-    _renderRuleSection('FLOWER — DAY EVENTS', 'Reminders for specific flower-day windows', flowerDayEvents, canEditBaked) +
-    _renderRuleSection('VEGETATIVE', 'Rules that apply throughout veg phase (any week)', veg, canEditBaked);
+  const header = '<div style="margin-bottom:14px">'+
+    '<div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:var(--text)">'+
+    (tabLabels[_activeRulesTab]||'Rules')+
+    ' <span style="font-size:11px;font-weight:500;color:var(--text3)">('+ruleCount+')</span></div>'+
+    '<div style="font-size:11px;color:var(--text3);margin-top:2px">'+(tabSubtitles[_activeRulesTab]||'')+'</div>'+
+    '</div>';
+
+  const list = filtered.length
+    ? filtered.map(r => _renderRuleCard(r, canEditBaked || r.source === 'user')).join('')
+    : '<div style="font-size:12px;color:var(--text3);font-style:italic;padding:24px;text-align:center;border:1px dashed var(--border2);border-radius:var(--r)">No rules in this tab yet. Click "+ New rule" to create one.</div>';
+
+  wrap.innerHTML = header + list;
 }
 
 // ── Save / delete / toggle paths for unified rules ──
@@ -3305,16 +3370,27 @@ function openUnifiedRuleEditor(ruleId){
     if(!confirm('This is a baked-in rule from the Resin OS schedule. Editing here creates a user override that may diverge from the SOP. Proceed?')) return;
   }
 
-  // Default rule shape for new entries
+  // Default rule shape for new entries. Phase is implicit from the
+  // currently active tab — so "+ New rule" inside the Veg tab creates a
+  // veg-scoped rule, no picker needed. Type defaults to a sensible value
+  // based on the tab.
+  const defaultPhase = (_activeRulesTab === 'veg') ? 'veg' :
+                       (_activeRulesTab === 'additives') ? 'flower' :
+                       'flower';
+  const defaultCategory = (_activeRulesTab === 'additives') ? 'additive' : 'ipm';
+  const defaultType = (_activeRulesTab === 'additives') ? 'additive' :
+                      (_activeRulesTab === 'veg') ? 'reminder' :
+                      'ipm';
   const r = editing ? JSON.parse(JSON.stringify(editing)) : {
     id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
     source: 'user',
-    category: 'ipm',
+    category: defaultCategory,
+    type: defaultType,
     name: '',
     product: '',
     dose: '',
-    scope: { phase: 'flower', weekRange: null, rooms: [] },
-    cadenceType: 'every_n',
+    scope: { phase: defaultPhase, weekRange: null, rooms: [] },
+    cadenceType: (_activeRulesTab === 'additives') ? 'flower_day' : 'every_n',
     every: 2,
     weekdays: [],
     dates: [],
@@ -3325,6 +3401,10 @@ function openUnifiedRuleEditor(ruleId){
     active: true,
     notes: '',
   };
+  // For existing rules, fill in `type` if missing (legacy from chunk 2)
+  if(editing && !r.type){
+    r.type = _resolveRuleType(r);
+  }
 
   // Coerce baked clone into user shape so save works
   if(isBaked){
@@ -3350,14 +3430,13 @@ function openUnifiedRuleEditor(ruleId){
   }).join('');
 
   const ct = r.cadenceType;
-  const cat = r.category;
-  const phase = (r.scope && r.scope.phase) || 'flower';
-  // Build category buttons
-  const catBtn = (key, label) => '<button type="button" onclick="urSetCategory(\''+key+'\')" id="ur-cat-'+key+'" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:'+(cat===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
-  // Build phase buttons
-  const phaseBtn = (key, label) => '<button type="button" onclick="urSetPhase(\''+key+'\')" id="ur-phase-'+key+'" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:'+(phase===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
+  const type = r.type || _resolveRuleType(r);
+  const phase = (r.scope && r.scope.phase) || (_activeRulesTab === 'veg' ? 'veg' : 'flower');
+  // Build TYPE buttons (replaces the old category picker — type is what the
+  // operator picks, phase is implicit from the active tab).
+  const typeBtn = (key, label) => '<button type="button" onclick="urSetType(\''+key+'\')" id="ur-type-'+key+'" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:'+(type===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
 
-  // Cadence-type buttons (visibility depends on category)
+  // Cadence-type buttons
   const cadBtn = (key, label) => '<button type="button" onclick="urSetCadenceType(\''+key+'\')" id="ur-cad-'+key+'" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:'+(ct===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
 
   const modal = document.createElement('div');
@@ -3368,17 +3447,17 @@ function openUnifiedRuleEditor(ruleId){
     '<button class="modal-close" onclick="closeUnifiedRuleEditor()">×</button></div>'+
     '<div class="modal-body" style="padding:18px"><div style="display:grid;gap:14px">'+
 
-    // Category
-    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Category</label>'+
+    // Type (badge) — IPM, Defol, Reminder, Additive, Other
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Type</label>'+
     '<div style="display:flex;flex-wrap:wrap;gap:5px">'+
-      catBtn('ipm','IPM spray')+catBtn('additive','Additive')+catBtn('flower-event','Flower day event')+catBtn('veg','Veg reminder')+catBtn('other','Other')+
+      typeBtn('ipm','IPM')+typeBtn('defol','Defol')+typeBtn('reminder','Reminder')+typeBtn('additive','Additive')+typeBtn('other','Other')+
     '</div></div>'+
 
-    // Phase
-    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Phase</label>'+
-    '<div style="display:flex;flex-wrap:wrap;gap:5px">'+
-      phaseBtn('flower','Flower')+phaseBtn('veg','Vegetative')+phaseBtn('any','Any')+
-    '</div></div>'+
+    // Phase indicator (read-only — phase is implicit from the active tab)
+    '<div style="font-size:11px;color:var(--text3);padding:6px 10px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border2)">'+
+      'Phase: <strong style="color:var(--text2)">'+(phase==='veg'?'Vegetative':phase==='flower'?'Flowering':'Any')+'</strong> '+
+      '<span style="color:var(--text3);margin-left:6px">(set by which tab you opened this from — to change, delete and recreate from the other tab)</span>'+
+    '</div>'+
 
     // Name
     '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Name</label>'+
@@ -3450,36 +3529,17 @@ function openUnifiedRuleEditor(ruleId){
   document.body.appendChild(modal);
 }
 
-function urSetCategory(cat){
-  ['ipm','additive','flower-event','veg','other'].forEach(k => {
-    const btn = document.getElementById('ur-cat-'+k);
-    if(btn) btn.style.background = (k===cat) ? 'var(--blue-bg)' : 'var(--bg3)';
+function urSetType(type){
+  ['ipm','defol','reminder','additive','other'].forEach(k => {
+    const btn = document.getElementById('ur-type-'+k);
+    if(btn) btn.style.background = (k===type) ? 'var(--blue-bg)' : 'var(--bg3)';
   });
-  document.getElementById('ur-cat-current') && (document.getElementById('ur-cat-current').value = cat);
-  // Auto-select sensible defaults per category
-  if(cat === 'additive' || cat === 'flower-event'){
-    // Switch phase to flower automatically
-    urSetPhase('flower');
-    // Suggest flower_day cadence for additive, flower_day_range for flower-event
-    if(cat === 'additive') urSetCadenceType('flower_day');
-    else urSetCadenceType('flower_day_range');
-  }
-  if(cat === 'veg'){
-    urSetPhase('veg');
-  }
-  // Hide product/dose row for flower-event category (it's a reminder, not a spray)
+  // Auto-suggest cadenceType per type (operator can override)
+  if(type === 'additive') urSetCadenceType('flower_day');
+  else if(type === 'defol') urSetCadenceType('flower_day_range');
+  // Hide product/dose for reminders (not a spray)
   const prodRow = document.getElementById('ur-product-row');
-  if(prodRow) prodRow.style.display = (cat === 'flower-event') ? 'none' : 'grid';
-}
-
-function urSetPhase(phase){
-  ['flower','veg','any'].forEach(k => {
-    const btn = document.getElementById('ur-phase-'+k);
-    if(btn) btn.style.background = (k===phase) ? 'var(--blue-bg)' : 'var(--bg3)';
-  });
-  // For veg, hide the rooms picker (applies to all veg rooms implicitly)
-  const roomsRow = document.getElementById('ur-rooms-row');
-  if(roomsRow) roomsRow.style.opacity = (phase === 'veg') ? '0.5' : '1';
+  if(prodRow) prodRow.style.display = (type === 'reminder') ? 'none' : 'grid';
 }
 
 function urSetCadenceType(type){
@@ -3498,16 +3558,11 @@ function closeUnifiedRuleEditor(){
 }
 
 function saveUnifiedRuleFromEditor(ruleId){
-  // Pull current category from the highlighted button
-  let category = 'other';
-  ['ipm','additive','flower-event','veg','other'].forEach(k => {
-    const btn = document.getElementById('ur-cat-'+k);
-    if(btn && btn.style.background === 'var(--blue-bg)') category = k;
-  });
-  let phase = 'flower';
-  ['flower','veg','any'].forEach(k => {
-    const btn = document.getElementById('ur-phase-'+k);
-    if(btn && btn.style.background === 'var(--blue-bg)') phase = k;
+  // Read TYPE from the highlighted type button (replaces category picker)
+  let ruleType = 'other';
+  ['ipm','defol','reminder','additive','other'].forEach(k => {
+    const btn = document.getElementById('ur-type-'+k);
+    if(btn && btn.style.background === 'var(--blue-bg)') ruleType = k;
   });
   let cadenceType = 'every_n';
   ['every_n','weekdays','dates','flower_day_range','flower_day'].forEach(t => {
@@ -3515,9 +3570,36 @@ function saveUnifiedRuleFromEditor(ruleId){
     if(btn && btn.style.background === 'var(--blue-bg)') cadenceType = t;
   });
 
+  // Phase is IMPLICIT — derived from the active tab. The editor doesn't
+  // let the user pick phase; that's controlled by where the editor was opened.
+  // Edit on existing rule preserves its existing phase.
+  let phase;
+  if(ruleId){
+    const existing = getRules().find(r => r.id === ruleId);
+    phase = (existing && existing.scope && existing.scope.phase) || 'flower';
+  } else {
+    phase = (_activeRulesTab === 'veg') ? 'veg' : 'flower';
+  }
+
+  // Category is derived from (type, phase). We keep `category` for backward
+  // compatibility with legacy task-generation code that still reads it.
+  // Mapping:
+  //   type=additive       → category='additive'
+  //   type=ipm            → category='ipm'
+  //   type=defol/reminder → category='flower-event' if phase=flower, else 'veg'
+  //   type=other          → category='other'
+  let category;
+  if(ruleType === 'additive') category = 'additive';
+  else if(ruleType === 'ipm') category = 'ipm';
+  else if(ruleType === 'defol' || ruleType === 'reminder'){
+    category = (phase === 'veg') ? 'veg' : 'flower-event';
+  } else category = 'other';
+
   const name = document.getElementById('ur-name').value.trim();
-  const product = document.getElementById('ur-product').value.trim();
-  const dose = document.getElementById('ur-dose').value.trim();
+  const productEl = document.getElementById('ur-product');
+  const doseEl = document.getElementById('ur-dose');
+  const product = (productEl ? productEl.value : '').trim();
+  const dose = (doseEl ? doseEl.value : '').trim();
   const notes = document.getElementById('ur-notes').value.trim();
   const active = document.getElementById('ur-active').checked;
 
@@ -3527,7 +3609,7 @@ function saveUnifiedRuleFromEditor(ruleId){
 
   // Cadence-specific fields
   const data = {
-    category, name, product, dose, notes, active,
+    category, type: ruleType, name, product, dose, notes, active,
     scope: { phase, weekRange: null, rooms: selectedRooms },
     cadenceType,
     every: parseInt(document.getElementById('ur-every').value) || 1,
@@ -3555,9 +3637,9 @@ function saveUnifiedRuleFromEditor(ruleId){
 
   // Validation
   if(!name){ alert('Rule name is required'); return; }
-  if(category === 'ipm' && !product){ alert('Product is required for IPM rules'); return; }
-  if(phase !== 'veg' && category !== 'flower-event' && !selectedRooms.length){
-    alert('Select at least one room (or set Phase to Veg)'); return;
+  if(ruleType === 'ipm' && !product){ alert('Product is required for IPM rules'); return; }
+  if(phase !== 'veg' && ruleType !== 'reminder' && !selectedRooms.length){
+    alert('Select at least one room'); return;
   }
   if(cadenceType === 'weekdays' && !data.weekdays.length){ alert('Select at least one weekday'); return; }
   if(cadenceType === 'dates' && !data.dates.length){ alert('Add at least one date'); return; }
@@ -10381,23 +10463,25 @@ async function pushConfigToCloud(silent=false){
   const _teamDirty     = sessionStorage.getItem('wg_team_dirty')==='1';
   const _rolePermsDirty= sessionStorage.getItem('wg_role_perms_dirty')==='1';
   let _ipmRulesDirty = sessionStorage.getItem('wg_ipm_rules_dirty')==='1';
+  let _rulesDirty = sessionStorage.getItem('wg_rules_dirty')==='1';
   const _ipmLogDirty   = sessionStorage.getItem('wg_ipm_log_dirty')==='1';
   const _flowerScheduleDirty = sessionStorage.getItem('wg_flower_schedule_dirty')==='1';
   const _trimQueueDirty= sessionStorage.getItem('wg_trim_queue_dirty')==='1';
 
-  // RACE-CONDITION GUARD: if rules are dirty but cloud pull hasn't completed
-  // yet, suppress pushing them. This prevents the "fresh device with empty
-  // localStorage pushes empty array, overwrites cloud rules" bug. Drop the
-  // dirty flag too so we don't burn it on a no-op push.
+  // RACE-CONDITION GUARDS: suppress pushing empty arrays when cloud pull
+  // hasn't completed yet. Applies to both legacy ipmRules and unified rules.
   if(_ipmRulesDirty && !_rulesPullCompleted){
     const localRules = L('wg_ipm_rules', []);
     if(!Array.isArray(localRules) || localRules.length === 0){
-      console.warn('[Rules] Suppressing push of empty ipmRules — pull has not completed. ' +
-                   'This prevents fresh devices from wiping cloud data.');
-      _ipmRulesDirty = false; // Skip ipmRules from this push; dirty stays set in sessionStorage
-      // Note: we intentionally do NOT clear the sessionStorage dirty flag here.
-      // It will get re-evaluated and pushed normally on the next debounce cycle
-      // (by which point pull should have completed).
+      console.warn('[Rules] Suppressing push of empty ipmRules — pull has not completed.');
+      _ipmRulesDirty = false;
+    }
+  }
+  if(_rulesDirty && !_rulesPullCompleted){
+    const localUnified = L(RULES_KEY, []);
+    if(!Array.isArray(localUnified) || localUnified.length === 0){
+      console.warn('[Rules] Suppressing push of empty unified rules — pull has not completed.');
+      _rulesDirty = false;
     }
   }
 
@@ -10409,7 +10493,8 @@ async function pushConfigToCloud(silent=false){
       ...(_rolePermsDirty ? {rolePerms} : {}),
       gsUrl,
       ...(_ipmRulesDirty ? {ipmRules: L('wg_ipm_rules',[])} : {}),
-      ...(_ipmLogDirty   ? {ipmLog:   L('wg_ipm_log',[])}   : {}),
+      ...(_rulesDirty    ? {rules:    L(RULES_KEY,[])}        : {}),
+      ...(_ipmLogDirty   ? {ipmLog:   L('wg_ipm_log',[])}     : {}),
       ...(_flowerScheduleDirty ? {flowerSchedule: L('wg_flower_schedule',[])} : {}),
       customChores:L('wg_custom_chores',null),
       customTasks:L('wg_custom_tasks',[]),
@@ -10437,6 +10522,7 @@ async function pushConfigToCloud(silent=false){
     if(_teamDirty)     sessionStorage.removeItem('wg_team_dirty');
     if(_rolePermsDirty)sessionStorage.removeItem('wg_role_perms_dirty');
     if(_ipmRulesDirty) sessionStorage.removeItem('wg_ipm_rules_dirty');
+    if(_rulesDirty)    sessionStorage.removeItem('wg_rules_dirty');
     if(_ipmLogDirty)   sessionStorage.removeItem('wg_ipm_log_dirty');
     if(_flowerScheduleDirty) sessionStorage.removeItem('wg_flower_schedule_dirty');
     if(_trimQueueDirty)sessionStorage.removeItem('wg_trim_queue_dirty');
@@ -10627,6 +10713,30 @@ async function pullConfigFromCloud(silent=false){
         renderUnifiedRules();
       }
     }
+
+    // Unified rules pull (chunk 2.5) — same guards as ipmRules
+    if(d.rules && Array.isArray(d.rules)){
+      const lastEditTs = parseInt(sessionStorage.getItem('wg_rules_last_edit') || '0');
+      const recentEdit = lastEditTs && (Date.now() - lastEditTs) < 10000;
+      const cloudEmpty = d.rules.length === 0;
+      const localRules = L(RULES_KEY, []);
+      const localHasRules = Array.isArray(localRules) && localRules.length > 0;
+      const staleEmpty = cloudEmpty && localHasRules;
+
+      if(recentEdit){
+        if(!silent) console.log('[Rules] (unified) Skipping cloud overwrite — recent edit window.');
+      } else if(staleEmpty){
+        if(!silent) console.log('[Rules] (unified) Skipping cloud overwrite — local has '+localRules.length+' rules, cloud is empty.');
+        sessionStorage.setItem('wg_rules_dirty', '1'); // queue re-push to heal cloud
+      } else {
+        S(RULES_KEY, d.rules);
+      }
+      // Re-render if visible
+      if(typeof renderUnifiedRules === 'function' && document.getElementById('page-rules') && document.getElementById('page-rules').classList.contains('active')){
+        renderUnifiedRules();
+      }
+    }
+
     if(d.ipmLog&&Array.isArray(d.ipmLog)){
       // Merge by id (append-only union, lead can prune via UI)
       const localLog = L('wg_ipm_log',[]);
