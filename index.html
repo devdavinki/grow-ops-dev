@@ -5381,9 +5381,12 @@ if(!rolePerms || !rolePerms.lead ||
    !rolePerms.lead.includes('settings') ||
    !rolePerms.lead.includes('supplies') ||
    !rolePerms.lead.includes('tuning') ||
+   !rolePerms.lead.includes('rules') ||
    !rolePerms.fertigator.includes('clonetracker') ||
    !rolePerms.fertigator.includes('supplies') ||
-   !rolePerms.ipm.includes('additive')){
+   !rolePerms.fertigator.includes('rules') ||
+   !rolePerms.ipm.includes('additive') ||
+   !rolePerms.ipm.includes('rules')){
   rolePerms={};
   Object.entries(ROLE_PERMISSIONS).forEach(([role,cfg])=>{
     rolePerms[role]=cfg.pages.slice();
@@ -5395,10 +5398,11 @@ function applyRolePerms(){
   if(!rolePerms) return;
   // Always ensure new pages are present even on old cached rolePerms.
   // Every role (including non-leads) gets calendar so the team can view it.
+  // 'rules' is added for lead/fertigator/ipm (chunk 2 — unified rules page).
   const ensurePages = {
-    lead:       ['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'],
-    fertigator: ['supplies','additive','checks','slack','clonetracker','calendar'],
-    ipm:        ['additive','ipm','calendar'],
+    lead:       ['assignments','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'],
+    fertigator: ['supplies','rules','additive','checks','slack','clonetracker','calendar'],
+    ipm:        ['rules','additive','ipm','calendar'],
     cloner:     ['calendar'],
     defoliator: ['calendar'],
     checker:    ['calendar'],
