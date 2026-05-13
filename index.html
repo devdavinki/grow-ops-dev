@@ -2908,6 +2908,17 @@ function migrateRulesV1(){
 //
 // Called from the existing save paths via a small monkey-patch later in
 // the file. Centralized here so the translation logic stays in one place.
+// Infer phase from a list of room IDs. If all rooms are veg-side (support
+// rooms only, no flower rooms r1..r11), return 'veg'. Otherwise 'flower'.
+// Used by _syncLegacyToUnified to recover phase info that's lost in the
+// legacy ipmRules shape (which has no phase field).
+function _inferPhaseFromRooms(roomList){
+  if(!Array.isArray(roomList) || !roomList.length) return 'flower';
+  const supportRoomIds = new Set(IPM_SUPPORT_ROOMS.map(r => r.id));
+  const allVegSide = roomList.every(rid => supportRoomIds.has(rid));
+  return allVegSide ? 'veg' : 'flower';
+}
+
 function _syncLegacyToUnified(){
   // Stamp the last-edit time so cloud-pull suppresses overwrites during
   // the propagation window for legacy IPM saves too.
@@ -2921,10 +2932,16 @@ function _syncLegacyToUnified(){
     // If a rule with this id already exists in the unified store, preserve
     // its non-IPM fields (scope.phase, etc) in case Chunk 2 added more.
     const existing = currentUser.find(c => c.id === r.id);
+    // For new (no existing match) rules, infer phase from the rooms list
+    // instead of always defaulting to flower. This recovers phase info that
+    // was lost when the rule round-tripped through the legacy ipmRules
+    // shape — relevant until the Apps Script staticKeys update is applied
+    // and the unified `rules` field starts syncing directly.
+    const inferredPhase = _inferPhaseFromRooms(r.rooms);
     const base = existing || {
       source: 'user',
       category: 'ipm',
-      scope: { phase: 'flower', weekRange: null, rooms: 'all' },
+      scope: { phase: inferredPhase, weekRange: null, rooms: 'all' },
       flowerDays: [],
       createdBy: r.createdBy || 'unknown',
       createdAt: r.createdAt || null,
@@ -3797,8 +3814,8 @@ function saveUnifiedRuleFromEditor(ruleId){
   // Validation
   if(!name){ alert('Rule name is required'); return; }
   if(ruleType === 'ipm' && !product){ alert('Product is required for IPM rules'); return; }
-  if(phase !== 'veg' && ruleType !== 'reminder' && !selectedRooms.length){
-    alert('Select at least one room'); return;
+  if(ruleType !== 'reminder' && !selectedRooms.length){
+    alert('Select at least one room (or check the 🌱 / 🌸 auto group)'); return;
   }
   if(cadenceType === 'weekdays' && !data.weekdays.length){ alert('Select at least one weekday'); return; }
   if(cadenceType === 'dates' && !data.dates.length){ alert('Add at least one date'); return; }
@@ -7509,16 +7526,6 @@ function computeDurationChange(p, a, shotCount, overnightTarget, currentSec, pha
 
   // Threshold: don't recommend if within 2 seconds
   if(Math.abs(deltaSec) < 2) return null;
-
-  // Noise filter: the 2-second threshold can fire on rounding boundaries
-  // when the actual per-shot delivery delta is sub-tenth-of-a-percent
-  // (e.g. 3.3%/shot vs 3.2%/shot model = 0.1% delta but 2s rounding nudge).
-  // Require at least 0.3% per-shot delivery delta to consider a real miss.
-  if(p.onePercentShotSize){
-    const currentPerShotPct = currentSec / p.onePercentShotSize;
-    const idealPerShotPct = budget.perShotPct;
-    if(Math.abs(currentPerShotPct - idealPerShotPct) < 0.3) return null;
-  }
 
   // Cap at 2× current duration (or 0.5× when reducing). Anything beyond
   // that ceiling is a sign the duration alone can't close the gap, and
@@ -11408,15 +11415,6 @@ function _tr_detectConfigDrift(programs){
       drifts.push(`${label} varies (${uniq.join('/')}%)`);
     }
   });
-  // P2 active/inactive split — same room, different irrigation strategies.
-  // p2Active === false is explicit Growlink-toggle-off; null/undefined = on.
-  const p2States = tnums.map(t => programs[t].p2Active === false ? 'off' : 'on');
-  const uniqP2 = Array.from(new Set(p2States));
-  if(uniqP2.length > 1){
-    const offTables = tnums.filter(t => programs[t].p2Active === false);
-    const onTables = tnums.filter(t => programs[t].p2Active !== false);
-    drifts.push(`P2 is OFF on table${offTables.length>1?'s':''} ${offTables.join(',')} but ON on table${onTables.length>1?'s':''} ${onTables.join(',')}`);
-  }
   if(!drifts.length) return null;
   return 'Tables in this room run different configs: ' + drifts.join(', ') + '. Tuning each table independently.';
 }
@@ -12065,15 +12063,6 @@ function _tr_renderP1Block(a){
                   : (r.fEnd != null ? r.fEnd : r.bEnd);
     const avgDiff = (avgEnd != null) ? avgEnd - target : null;
 
-    // Single-probe fallback flag — surface that the rec is based on one
-    // sensor only. Operators should know the avg isn't a two-probe consensus.
-    const singleProbeFallback = (r.fEnd != null && r.bEnd == null)
-      ? 'B'
-      : (r.bEnd != null && r.fEnd == null ? 'F' : null);
-    if(singleProbeFallback){
-      lines.push({sev:'info', text:`${singleProbeFallback} sensor missing for P1 endpoint — rec based on ${singleProbeFallback === 'B' ? 'F' : 'B'} only. Confirm sensor health before applying.`});
-    }
-
     if(p.rampUpShotSize && p.quantity && avgDiff != null){
       // ────────────────────────────────────────────────────────
       // P1 RECOMMENDATION — narrative format with rescue anchoring
@@ -12128,36 +12117,6 @@ function _tr_renderP1Block(a){
         neededShots = Math.max(1, p.quantity - cappedAdjust);
       }
 
-      // ── P1 LATE-NIGHT CAP ──
-      // P1 is a ramp-to-field-capacity phase that should complete during the
-      // photoperiod. Recommending a last shot at 2-3 AM is operationally
-      // wrong — it collapses the overnight dryback window and turns P1 into
-      // de-facto continuous watering. Cap at 22:00 (10 PM) and surface the
-      // remaining gap so duration or P2 re-enable can carry it.
-      const LATE_NIGHT_CAP_MIN = 22 * 60; // 22:00
-      let lateNightTruncated = false;
-      let lateNightUnmetShots = 0;
-      if(neededShots > p.quantity && p.rampStart && p.rampUpShotInterval){
-        const toMin = s => {
-          if(!s) return null;
-          const parts = String(s).split(':').map(Number);
-          if(parts.some(isNaN) || parts.length < 2) return null;
-          return parts[0]*60 + parts[1];
-        };
-        const startMin = toMin(p.rampStart);
-        if(startMin != null){
-          // Last shot of N events fires at: start + (N-1) * interval
-          // Solve for maxN such that start + (maxN-1) * interval <= 22:00
-          const maxFittingShots = Math.floor((LATE_NIGHT_CAP_MIN - startMin) / p.rampUpShotInterval) + 1;
-          if(maxFittingShots > 0 && maxFittingShots < neededShots){
-            lateNightUnmetShots = neededShots - maxFittingShots;
-            neededShots = maxFittingShots;
-            lateNightTruncated = true;
-          }
-        }
-      }
-
-
       // Compute new last-shot fire time for narrative
       const newLastShotTime = (neededShots !== p.quantity && p.rampStart && p.rampUpShotInterval)
         ? shotFireTime(p.rampStart, neededShots, p.rampUpShotInterval)
@@ -12174,28 +12133,8 @@ function _tr_renderP1Block(a){
       // ── Build the narrative ──
       const fmtTimeFromRamp = (qty) => shotFireTime(p.rampStart, qty, p.rampUpShotInterval) || '?';
 
-      if(neededShots === p.quantity && !rescue.fired && !lateNightTruncated){
-        // Average is on target — but if a single probe is materially off
-        // (>5% from target), that's not a clean "on target" outcome. Surface
-        // the unevenness so operators don't dismiss the table.
-        const worstProbeDiff = Math.max(
-          fDiff != null ? Math.abs(fDiff) : 0,
-          bDiff != null ? Math.abs(bDiff) : 0
-        );
-        if(worstProbeDiff >= 5){
-          lines.push({sev:'info', text:`Average on target — but one probe is ${worstProbeDiff.toFixed(1)}% off. Table-wide rec holds, but see F/B spread flag below.`});
-        } else {
-          lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
-        }
-      } else if(neededShots === p.quantity && lateNightTruncated){
-        // Edge case: we wanted to add shots but the 22:00 cap absorbed all
-        // of them. The table is under-watered, but extending P1 isn't the
-        // answer. Surface the budget shortfall directly.
-        const unmetPct = (lateNightUnmetShots * p.rampUpShotSize).toFixed(1);
-        const durationHint = (durationChange && !durationChange.hitFloor && !durationChange.hitCeiling)
-          ? ` <span style="color:var(--text3)">Duration alternative: ${p.durationSec}s → ${durationChange.newSec}s.</span>`
-          : '';
-        lines.push({sev:'action', text:`<b>Hold ${p.quantity} P1 events</b> — adding shots would push P1 past 10 PM. <span style="color:var(--amber)">⚠ Budget is ~${unmetPct}% short (needs ${lateNightUnmetShots} shot${lateNightUnmetShots>1?'s':''} worth of extra water). Increase shot duration or re-enable P2 to carry it; don't extend P1 into the dryback window.</span>${durationHint}`});
+      if(neededShots === p.quantity && !rescue.fired){
+        lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
       } else {
         // Action sentence
         let action;
@@ -12228,10 +12167,6 @@ function _tr_renderP1Block(a){
             justification = `P1 overshooting field cap. Removing ${p.quantity - neededShots} shot${p.quantity - neededShots > 1 ? 's' : ''} brings total daily delivery down ~${((p.quantity - neededShots) * p.rampUpShotSize).toFixed(1)}%.`;
           } else {
             justification = `P1 falling short of field cap. Adding ${neededShots - p.quantity} shot${neededShots - p.quantity > 1 ? 's' : ''} adds ~${((neededShots - p.quantity) * p.rampUpShotSize).toFixed(1)}% more daily delivery.`;
-          }
-          if(lateNightTruncated){
-            const unmetPct = (lateNightUnmetShots * p.rampUpShotSize).toFixed(1);
-            justification += ` <span style="color:var(--amber)">⚠ Capped at 22:00 — budget needs ${lateNightUnmetShots} more shot${lateNightUnmetShots>1?'s':''} (~${unmetPct}% more water) that don't fit before lights-off. Increase shot duration or re-enable P2 to carry the rest; don't extend P1 past 10 PM.</span>`;
           }
           if(durationChange && Math.abs(durationDelta) >= 2 && !durationChange.hitFloor){
             justification += ` <span style="color:var(--text3)">Duration alternative: ${p.durationSec}s → ${durationChange.newSec}s.</span>`;
