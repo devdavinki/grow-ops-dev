@@ -2927,32 +2927,45 @@ function _syncLegacyToUnified(){
   const current = L(RULES_KEY, []);
   // Strip baked from current (shouldn't be persisted anyway, but defensive)
   const currentUser = current.filter(r => r.source !== 'baked');
-  // Translate legacy rules into new shape (same as migration)
+  // Translate legacy rules into new shape (same as migration).
+  // CRITICAL: when a unified record already exists for this id, it is the
+  // authoritative source for scope (phase + rooms including auto markers).
+  // We only override scope from legacy if NO existing record is found
+  // (truly new rule arriving via legacy path — rare since chunk 2.5).
   const translated = legacy.map(r => {
-    // If a rule with this id already exists in the unified store, preserve
-    // its non-IPM fields (scope.phase, etc) in case Chunk 2 added more.
     const existing = currentUser.find(c => c.id === r.id);
-    // For new (no existing match) rules, infer phase from the rooms list
-    // instead of always defaulting to flower. This recovers phase info that
-    // was lost when the rule round-tripped through the legacy ipmRules
-    // shape — relevant until the Apps Script staticKeys update is applied
-    // and the unified `rules` field starts syncing directly.
+    if(existing){
+      // Preserve unified-side scope (phase + auto markers + room list).
+      // Only update fields that legacy is authoritative for: name, product,
+      // dose, cadence, dates, active, notes.
+      return {
+        ...existing,
+        name: r.name || existing.name || '',
+        product: r.product || existing.product || '',
+        dose: r.dose || existing.dose || '',
+        cadenceType: r.cadenceType || existing.cadenceType || 'every_n',
+        every: r.every || existing.every || 1,
+        weekdays: Array.isArray(r.weekdays) ? r.weekdays : (existing.weekdays || []),
+        dates: Array.isArray(r.dates) ? r.dates : (existing.dates || []),
+        startDate: r.startDate || existing.startDate || null,
+        active: r.active !== false,
+        notes: r.notes || existing.notes || '',
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    // No existing unified record — infer phase from rooms (legacy fallback).
     const inferredPhase = _inferPhaseFromRooms(r.rooms);
-    const base = existing || {
+    return {
       source: 'user',
       category: 'ipm',
-      scope: { phase: inferredPhase, weekRange: null, rooms: 'all' },
       flowerDays: [],
       createdBy: r.createdBy || 'unknown',
       createdAt: r.createdAt || null,
-    };
-    return {
-      ...base,
       id: r.id,
       name: r.name || '',
       product: r.product || '',
       dose: r.dose || '',
-      scope: { ...base.scope, rooms: Array.isArray(r.rooms) ? r.rooms : (base.scope.rooms || 'all') },
+      scope: { phase: inferredPhase, weekRange: null, rooms: Array.isArray(r.rooms) ? r.rooms : 'all' },
       cadenceType: r.cadenceType || 'every_n',
       every: r.every || 1,
       weekdays: Array.isArray(r.weekdays) ? r.weekdays : [],
@@ -10836,7 +10849,12 @@ async function pullConfigFromCloud(silent=false){
       } else {
         flowerSchedule = d.flowerSchedule;
         S('wg_flower_schedule', flowerSchedule);
-        _syncFlowerScheduleToUnified(); // bridge: mirror cloud pull into unified store
+        // Same skip as ipmRules — don't corrupt the unified store with
+        // legacy-shape data when authoritative `rules` is available.
+        const cloudHasUnified = d.rules && Array.isArray(d.rules);
+        if(!cloudHasUnified){
+          _syncFlowerScheduleToUnified(); // bridge: mirror cloud pull into unified store (legacy fallback only)
+        }
       }
       // If Settings is currently open, refresh the editor so changes appear
       if(typeof renderFlowerScheduleEditor==='function' && document.getElementById('flower-schedule-editor')){
@@ -10879,7 +10897,16 @@ async function pullConfigFromCloud(silent=false){
         // Safe to trust cloud (either non-empty, or local is also empty).
         ipmRules = d.ipmRules;
         S('wg_ipm_rules', ipmRules);
-        _syncLegacyToUnified(); // bridge: mirror cloud pull into unified store
+        // CRITICAL: skip the bridge when cloud also returns the unified `rules`
+        // field. The bridge would overwrite the authoritative unified record
+        // with inferred-phase / expanded-rooms versions, corrupting veg rules
+        // and losing auto:in-veg / auto:in-flower markers.
+        const cloudHasUnified = d.rules && Array.isArray(d.rules);
+        if(!cloudHasUnified){
+          _syncLegacyToUnified(); // bridge: mirror cloud pull into unified store (legacy fallback only)
+        } else {
+          if(!silent) console.log('[Rules] Skipping legacy bridge — cloud returned authoritative `rules` field.');
+        }
       }
       // Always re-render to surface any changes from above
       if(typeof renderIpmRules==='function' && document.getElementById('page-ipm') && document.getElementById('page-ipm').classList.contains('active')){
