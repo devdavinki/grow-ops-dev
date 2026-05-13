@@ -2014,8 +2014,12 @@ function _resolveAutoInVegRooms(){
 // Used by flowering-tab rules so operators don't have to update room picks
 // when rooms flip in or finish a cycle.
 function _resolveAutoInFlowerRooms(){
+  // Includes 'harvest' stage: rooms past day 66 may still have plants
+  // (overruns where lead let them go longer). They stay in this group
+  // until METRC harvest data updates getStage to 'empty' or the room
+  // is relaunched into veg.
   return rooms
-    .filter(rm => rm.id && (getStage(rm) === 'flower' || getStage(rm) === 'late'))
+    .filter(rm => rm.id && (getStage(rm) === 'flower' || getStage(rm) === 'late' || getStage(rm) === 'harvest'))
     .map(rm => rm.id);
 }
 
