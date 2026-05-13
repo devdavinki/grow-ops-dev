@@ -415,8 +415,7 @@ button { cursor: pointer; }
   <button class="nav-tab" onclick="showPage('metrc')" data-page="metrc" data-roles="lead,cloner,postprod">METRC Data</button>
   <button class="nav-tab" onclick="showPage('today-log')" data-page="today-log" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Today's Log</button>
   <button class="nav-tab" onclick="showPage('calendar')" data-page="calendar" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">Calendar</button>
-  <button class="nav-tab" onclick="showPage('additive')" data-page="additive" data-roles="lead,fertigator">Additive Schedule</button>
-  <button class="nav-tab" onclick="showPage('ipm')" data-page="ipm" data-roles="lead,ipm">IPM Schedule</button>
+  <button class="nav-tab" onclick="showPage('rules')" data-page="rules" data-roles="lead,fertigator,ipm">Rules</button>
   <button class="nav-tab" onclick="showPage('checks')" data-page="checks" data-roles="lead,checker,ipm">Room Checks</button>
   <button class="nav-tab" onclick="showPage('slack')" data-page="slack" data-roles="lead">Slack Dispatch</button>
   <button class="nav-tab" onclick="showPage('daily-review')" data-page="daily-review" data-roles="lead">Daily Review</button>
@@ -700,6 +699,44 @@ button { cursor: pointer; }
     </div>
 
     <div id="ipmsub-history" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px;color:var(--text2)">All sprays + skips. Most recent first.</div>
+        <select id="ipm-history-filter" onchange="renderIpmHistory()" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
+          <option value="all">All entries</option>
+          <option value="done">Done only</option>
+          <option value="skipped">Skipped only</option>
+        </select>
+      </div>
+      <div id="ipm-history-list"></div>
+    </div>
+  </div>
+
+  <!-- ══ PAGE: RULES (unified — replaces IPM Schedule + Additive Schedule) ══ -->
+  <div id="page-rules" class="page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h1 style="font-size:22px;font-weight:700;margin:0">Rules</h1>
+        <div style="font-size:12px;color:var(--text2);margin-top:3px">All scheduled tasks in one place — IPM sprays, additive schedule, flower-day events, veg reminders.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="pullConfigFromCloud(false).then(()=>renderUnifiedRules())" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+        <button onclick="openUnifiedRuleEditor()" class="btn-primary" style="font-size:12px;padding:6px 14px">+ New rule</button>
+      </div>
+    </div>
+
+    <!-- Sub-tab: Rules list vs History -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid var(--border)">
+      <button class="nav-tab active" id="rules-subtab-list" onclick="showRulesSubtab('list',this)" style="font-size:12px">Rules</button>
+      <button class="nav-tab" id="rules-subtab-history" onclick="showRulesSubtab('history',this)" style="font-size:12px">History</button>
+    </div>
+
+    <!-- LIST sub-tab — section-based layout -->
+    <div id="rules-sub-list">
+      <div id="rules-sections"></div>
+    </div>
+
+    <!-- HISTORY sub-tab — reuses existing renderIpmHistory output -->
+    <div id="rules-sub-history" style="display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--text2)">All sprays + skips. Most recent first.</div>
         <select id="ipm-history-filter" onchange="renderIpmHistory()" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)">
@@ -1963,11 +2000,11 @@ function getIpmRoom(id){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
+  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
   defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
-  fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','additive','checks','slack','metrc','supplies'], roomView:'basic'},
+  fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','rules','additive','checks','slack','metrc','supplies'], roomView:'basic'},
   cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
-  ipm:        {pages:['assignments','rooms','today-log','calendar','checks','additive','ipm'], roomView:'basic'},
+  ipm:        {pages:['assignments','rooms','today-log','calendar','checks','rules','additive','ipm'], roomView:'basic'},
   checker:    {pages:['assignments','today-log','calendar','checks'], roomView:'none'},
   postprod:   {pages:['assignments','postprod','today-log','calendar','metrc'], roomView:'none'},
 };
@@ -2858,10 +2895,672 @@ function _syncLegacyToUnified(){
   });
   S(RULES_KEY, translated);
   sessionStorage.setItem('wg_rules_dirty', '1');
+  // Re-render unified Rules page if open (chunk 2)
+  if(typeof renderUnifiedRules === 'function'){
+    const page = document.getElementById('page-rules');
+    if(page && page.classList.contains('active')){
+      renderUnifiedRules();
+    }
+  }
 }
 
 // Run the migration NOW so wg_rules_v1 exists for any callers below.
 migrateRulesV1();
+
+// ── Flower-schedule migration (chunk 2) ─────────────────────────────
+// Translates wg_flower_schedule entries into unified rules with
+// category: 'flower-event'. Idempotent via marker key.
+// Shape: {id, dayStart, dayEnd, label, notes} → unified rule.
+function migrateFlowerScheduleV2(){
+  const marker = 'wg_rules_v1_flower_migrated';
+  if(localStorage.getItem(marker)) return;
+  const fs = L('wg_flower_schedule', []);
+  if(!Array.isArray(fs) || !fs.length){
+    localStorage.setItem(marker, '1');
+    return;
+  }
+  const current = L(RULES_KEY, []);
+  // De-dupe: skip flower-schedule entries already in the unified store by id
+  const existingIds = new Set(current.map(r => r.id));
+  const toAdd = fs
+    .filter(ev => !existingIds.has('flevent_' + ev.id))
+    .map(ev => ({
+      id: 'flevent_' + ev.id,
+      source: 'user',
+      category: 'flower-event',
+      name: ev.label || '',
+      product: '',
+      dose: '',
+      scope: {
+        phase: 'flower',
+        weekRange: null,
+        rooms: 'all',
+      },
+      cadenceType: 'flower_day_range',
+      dayStart: ev.dayStart || null,
+      dayEnd: ev.dayEnd || ev.dayStart || null,
+      every: 1,
+      weekdays: [],
+      dates: [],
+      flowerDays: [],
+      startDate: null,
+      active: true,
+      notes: ev.notes || '',
+      createdBy: 'migration',
+      createdAt: null,
+      updatedAt: new Date().toISOString(),
+    }));
+  if(toAdd.length){
+    S(RULES_KEY, [...current, ...toAdd]);
+    sessionStorage.setItem('wg_rules_dirty', '1');
+    console.log('[rules-v1] Migrated ' + toAdd.length + ' flower-schedule events into unified rules');
+  }
+  localStorage.setItem(marker, '1');
+}
+
+// Bridge for flowerSchedule writes — mirror changes into unified store.
+// Called from updateFlowerScheduleEvent / addFlowerScheduleEvent /
+// removeFlowerScheduleEvent (we monkey-patch those later in this file).
+function _syncFlowerScheduleToUnified(){
+  const fs = L('wg_flower_schedule', []);
+  const current = L(RULES_KEY, []);
+  // Strip out all existing flower-event entries — we'll rewrite them from
+  // the source of truth. Other category entries are preserved.
+  const kept = current.filter(r => r.category !== 'flower-event' || r.source !== 'user');
+  const translated = fs.map(ev => {
+    // Look for an existing entry by id (in case it has more fields like createdAt)
+    const existing = current.find(r => r.id === 'flevent_' + ev.id);
+    return {
+      id: 'flevent_' + ev.id,
+      source: 'user',
+      category: 'flower-event',
+      name: ev.label || '',
+      product: '',
+      dose: '',
+      scope: {
+        phase: 'flower',
+        weekRange: null,
+        rooms: 'all',
+      },
+      cadenceType: 'flower_day_range',
+      dayStart: ev.dayStart || null,
+      dayEnd: ev.dayEnd || ev.dayStart || null,
+      every: 1,
+      weekdays: [],
+      dates: [],
+      flowerDays: [],
+      startDate: null,
+      active: ev.active !== false,
+      notes: ev.notes || '',
+      createdBy: existing ? existing.createdBy : 'user',
+      createdAt: existing ? existing.createdAt : null,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  S(RULES_KEY, [...kept, ...translated]);
+  sessionStorage.setItem('wg_rules_dirty', '1');
+}
+
+migrateFlowerScheduleV2();
+
+// ══════════════════════════════════════════════════════════════════
+// UNIFIED RULES UI (Chunk 2) — replaces IPM Schedule + Additive Schedule pages
+// ══════════════════════════════════════════════════════════════════
+// Sections (vertical, all visible):
+//   1. Flower — IPM sprays            (category:'ipm', scope.phase:'flower')
+//   2. Flower — Additive schedule     (category:'additive') — baked + user-added
+//   3. Flower — Day events            (category:'flower-event')
+//   4. Vegetative — All rules         (scope.phase:'veg', any category)
+//
+// Each section has its own list. Baked entries get a lock icon and are
+// editable only by leads (with a confirmation modal).
+
+const RULE_CATEGORY_LABELS = {
+  'ipm':           'IPM spray',
+  'additive':      'Additive',
+  'flower-event':  'Flower day event',
+  'veg':           'Veg reminder',
+  'other':         'Other',
+};
+const RULE_CATEGORY_COLORS = {
+  'ipm':           { pill: 'background:rgba(59,130,246,0.15);color:#3b82f6', border: 'var(--blue,#3b82f6)' },
+  'additive':      { pill: 'background:rgba(245,158,11,0.15);color:#f59e0b', border: 'var(--amber)' },
+  'flower-event':  { pill: 'background:rgba(168,85,247,0.15);color:#a855f7', border: 'var(--purple,#a855f7)' },
+  'veg':           { pill: 'background:rgba(34,197,94,0.15);color:#22c55e',  border: 'var(--green)' },
+  'other':         { pill: 'background:rgba(100,116,139,0.15);color:#64748b',border: 'var(--text3)' },
+};
+
+function showRulesSubtab(tab, btn){
+  document.querySelectorAll('#page-rules .nav-tab').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  document.getElementById('rules-sub-list').style.display    = tab==='list'    ? 'block' : 'none';
+  document.getElementById('rules-sub-history').style.display = tab==='history' ? 'block' : 'none';
+  if(tab==='history' && typeof renderIpmHistory === 'function') renderIpmHistory();
+}
+
+// Build a human-readable cadence string for a rule
+function _ruleCadenceText(r){
+  if(r.cadenceType === 'every_n'){
+    return 'Every ' + (r.every || 1) + ' day' + ((r.every||1)===1?'':'s') + (r.startDate ? ' from ' + r.startDate : '');
+  }
+  if(r.cadenceType === 'weekdays'){
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return (r.weekdays || []).map(i => days[i]).join(', ') || 'no days set';
+  }
+  if(r.cadenceType === 'dates'){
+    return 'Specific dates (' + (r.dates || []).length + ')';
+  }
+  if(r.cadenceType === 'flower_day_range'){
+    if(r.dayStart && r.dayEnd && r.dayEnd !== r.dayStart) return 'Flower day ' + r.dayStart + '–' + r.dayEnd;
+    if(r.dayStart) return 'Flower day ' + r.dayStart;
+    return 'Flower day not set';
+  }
+  if(r.cadenceType === 'flower_day'){
+    const days = (r.flowerDays || []).slice().sort((a,b)=>a-b).join(', ');
+    return days ? 'Flower day ' + days : 'Flower day not set';
+  }
+  return r.cadenceType || '?';
+}
+
+// Build a human-readable scope (rooms) string
+function _ruleScopeText(r){
+  const rooms = (r.scope && r.scope.rooms) || [];
+  if(rooms === 'all') return 'All rooms';
+  if(!Array.isArray(rooms) || !rooms.length) return 'No rooms';
+  const names = rooms.map(rid => (getIpmRoom(rid) || {name: rid}).name);
+  if(names.length <= 3) return names.join(', ');
+  return names.slice(0, 2).join(', ') + ' + ' + (names.length - 2) + ' more';
+}
+
+// Render a single rule card. canEdit=false → lock icon + disabled buttons.
+function _renderRuleCard(r, canEdit){
+  const cat = RULE_CATEGORY_COLORS[r.category] || RULE_CATEGORY_COLORS.other;
+  const isLeadOverride = r.source === 'baked' && canEdit;
+  const borderColor = r.active ? cat.border : 'var(--text3)';
+  const opacity = r.active ? '' : 'opacity:0.6;';
+  const lockIcon = r.source === 'baked' ? '<span title="Baked-in — built into the app" style="font-size:11px;color:var(--text3)">🔒</span> ' : '';
+  const catPill = '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);font-weight:600;'+cat.pill+'">'+(RULE_CATEGORY_LABELS[r.category]||r.category)+'</span>';
+  const productPill = r.product ? '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:rgba(168,85,247,0.15);color:var(--purple,#a855f7);font-weight:600">'+r.product+'</span>' : '';
+  const pausedPill = !r.active ? '<span style="font-size:10px;padding:1px 7px;border-radius:var(--r);background:var(--bg3);color:var(--text3);font-weight:600">paused</span>' : '';
+  const cadenceText = _ruleCadenceText(r);
+  const scopeText = _ruleScopeText(r);
+  const doseLine = r.dose ? '<div style="font-size:11px;color:var(--text2);margin-top:3px">Dose: '+r.dose+'</div>' : '';
+  const notesLine = r.notes ? '<div style="font-size:11px;color:var(--text2);margin-top:3px;padding:4px 6px;background:var(--bg3);border-radius:var(--r)">'+r.notes.replace(/</g,'&lt;')+'</div>' : '';
+  const editBtnDisabled = (r.source === 'baked' && !canEdit);
+  const toggleBtnDisabled = (r.source === 'baked' && !canEdit);
+  const editBtn = '<button onclick="openUnifiedRuleEditor(\''+r.id+'\')" '+(editBtnDisabled?'disabled':'')+' style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:'+(editBtnDisabled?'var(--text3)':'var(--text2)')+';cursor:'+(editBtnDisabled?'not-allowed':'pointer')+';opacity:'+(editBtnDisabled?'0.4':'1')+'">Edit</button>';
+  const toggleBtn = '<button onclick="toggleUnifiedRule(\''+r.id+'\')" '+(toggleBtnDisabled?'disabled':'')+' style="font-size:11px;padding:4px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:'+(toggleBtnDisabled?'var(--text3)':'var(--text2)')+';cursor:'+(toggleBtnDisabled?'not-allowed':'pointer')+';opacity:'+(toggleBtnDisabled?'0.4':'1')+'">'+(r.active?'Pause':'Resume')+'</button>';
+
+  return '<div class="card" style="border-left:3px solid '+borderColor+';margin-bottom:8px;'+opacity+'">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+    '<div style="flex:1;min-width:200px">'+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+    '<div style="font-size:14px;font-weight:700;color:var(--text)">'+lockIcon+(r.name||'(unnamed)')+'</div>'+
+    catPill + productPill + pausedPill +
+    '</div>'+
+    '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+scopeText+' · '+cadenceText+'</div>'+
+    doseLine + notesLine +
+    '</div>'+
+    '<div style="display:flex;gap:5px;flex-shrink:0">'+
+    toggleBtn + editBtn +
+    '</div></div></div>';
+}
+
+// Render one section header + list
+function _renderRuleSection(title, subtitle, rules, canEditBaked){
+  const list = rules.length
+    ? rules.map(r => _renderRuleCard(r, canEditBaked || r.source === 'user')).join('')
+    : '<div style="font-size:12px;color:var(--text3);font-style:italic;padding:14px;text-align:center;border:1px dashed var(--border2);border-radius:var(--r)">No rules in this section yet.</div>';
+  return '<div style="margin-bottom:24px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:6px">'+
+    '<div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:var(--text)">'+title+' <span style="font-size:11px;font-weight:500;color:var(--text3)">('+rules.length+')</span></div>'+
+    (subtitle ? '<div style="font-size:11px;color:var(--text3)">'+subtitle+'</div>' : '')+
+    '</div>'+
+    list +
+    '</div>';
+}
+
+function renderUnifiedRules(){
+  const wrap = document.getElementById('rules-sections');
+  if(!wrap) return;
+  const allRules = getRules();
+
+  // Permission: leads can override baked-in entries
+  const canEditBaked = loggedInMember && loggedInMember.role === 'lead';
+
+  // Partition rules into 4 sections
+  const flowerIpm = allRules.filter(r =>
+    r.category === 'ipm' && (r.scope?.phase === 'flower' || r.scope?.phase === 'any')
+  );
+  const flowerAdditive = allRules.filter(r => r.category === 'additive');
+  const flowerDayEvents = allRules.filter(r => r.category === 'flower-event');
+  const veg = allRules.filter(r =>
+    r.scope?.phase === 'veg' || r.category === 'veg' ||
+    (r.category === 'ipm' && Array.isArray(r.scope?.rooms) && r.scope.rooms.includes('veg'))
+  );
+  // Sort each section: active first, then by name
+  const sortRules = arr => arr.sort((a,b) => {
+    if(a.active !== b.active) return a.active ? -1 : 1;
+    if(a.source !== b.source) return a.source === 'baked' ? -1 : 1; // baked first within same active state
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  [flowerIpm, flowerAdditive, flowerDayEvents, veg].forEach(sortRules);
+
+  // Sort additives chronologically by flower day so the schedule reads top-to-bottom
+  flowerAdditive.sort((a, b) => {
+    const aDay = (a.flowerDays && a.flowerDays[0]) || 999;
+    const bDay = (b.flowerDays && b.flowerDays[0]) || 999;
+    return aDay - bDay;
+  });
+
+  wrap.innerHTML =
+    _renderRuleSection('FLOWER — IPM SPRAYS', 'Spray rotations for flower rooms', flowerIpm, canEditBaked) +
+    _renderRuleSection('FLOWER — ADDITIVE SCHEDULE', 'Tier 2 additives by flower day. Baked entries follow Resin OS SOP.', flowerAdditive, canEditBaked) +
+    _renderRuleSection('FLOWER — DAY EVENTS', 'Reminders for specific flower-day windows', flowerDayEvents, canEditBaked) +
+    _renderRuleSection('VEGETATIVE', 'Rules that apply throughout veg phase (any week)', veg, canEditBaked);
+}
+
+// ── Save / delete / toggle paths for unified rules ──
+function saveUnifiedRule(ruleId, ruleData){
+  const userRules = getUserRules();
+  const idx = userRules.findIndex(r => r.id === ruleId);
+  const now = new Date().toISOString();
+  const merged = {
+    ...ruleData,
+    id: ruleId,
+    source: 'user',
+    updatedAt: now,
+    createdAt: (idx >= 0 && userRules[idx].createdAt) ? userRules[idx].createdAt : now,
+    createdBy: (idx >= 0 && userRules[idx].createdBy) ? userRules[idx].createdBy : (loggedInMember ? loggedInMember.name : 'unknown'),
+  };
+  if(idx >= 0) userRules[idx] = merged;
+  else userRules.push(merged);
+  saveUserRules(userRules);
+
+  // Also write back to legacy stores so existing readers keep working
+  _syncUnifiedToLegacy();
+
+  pushConfigToCloud(true);
+  renderUnifiedRules();
+  if(typeof renderAssignments === 'function') renderAssignments();
+}
+
+function deleteUnifiedRule(ruleId){
+  const rule = getRules().find(r => r.id === ruleId);
+  if(!rule) return;
+  if(rule.source === 'baked'){
+    alert('Baked-in rules cannot be deleted from the UI. Edit the ADDITIVES constant in the code to remove.');
+    return;
+  }
+  if(!confirm('Delete this rule? History entries are kept.')) return;
+  const userRules = getUserRules().filter(r => r.id !== ruleId);
+  saveUserRules(userRules);
+  _syncUnifiedToLegacy();
+  pushConfigToCloud(true);
+  closeUnifiedRuleEditor();
+  renderUnifiedRules();
+  if(typeof renderAssignments === 'function') renderAssignments();
+}
+
+function toggleUnifiedRule(ruleId){
+  const userRules = getUserRules();
+  const r = userRules.find(x => x.id === ruleId);
+  if(!r){
+    // Try to find in baked — toggling baked requires lead role
+    const all = getRules();
+    const baked = all.find(x => x.id === ruleId);
+    if(baked && baked.source === 'baked'){
+      if(!loggedInMember || loggedInMember.role !== 'lead'){
+        alert('Only leads can pause baked-in rules.');
+        return;
+      }
+      // Lead pause: clone baked into user store as inactive
+      userRules.push({...baked, source: 'user', active: false, updatedAt: new Date().toISOString()});
+      saveUserRules(userRules);
+      _syncUnifiedToLegacy();
+      pushConfigToCloud(true);
+      renderUnifiedRules();
+    }
+    return;
+  }
+  r.active = !r.active;
+  r.updatedAt = new Date().toISOString();
+  saveUserRules(userRules);
+  _syncUnifiedToLegacy();
+  pushConfigToCloud(true);
+  renderUnifiedRules();
+  if(typeof renderAssignments === 'function') renderAssignments();
+}
+
+// Reverse bridge: when the unified store changes via new UI, mirror back to
+// legacy stores (wg_ipm_rules + wg_flower_schedule) so existing task-
+// generation code and other readers keep working in chunk 2.
+function _syncUnifiedToLegacy(){
+  const all = getUserRules();
+  // IPM rules: anything category:'ipm' becomes a legacy ipm rule
+  const ipmEntries = all.filter(r => r.category === 'ipm').map(r => ({
+    id: r.id,
+    name: r.name || '',
+    product: r.product || '',
+    dose: r.dose || '',
+    rooms: Array.isArray(r.scope?.rooms) ? r.scope.rooms : (r.scope?.rooms === 'all' ? [] : []),
+    cadenceType: r.cadenceType || 'every_n',
+    every: r.every || 1,
+    weekdays: r.weekdays || [],
+    dates: r.dates || [],
+    startDate: r.startDate || null,
+    active: r.active !== false,
+    notes: r.notes || '',
+    createdBy: r.createdBy || 'unknown',
+    createdAt: r.createdAt || null,
+    updatedAt: r.updatedAt || null,
+  }));
+  S('wg_ipm_rules', ipmEntries);
+  sessionStorage.setItem('wg_ipm_rules_dirty', '1');
+  // Update the global ipmRules variable too (some readers use it directly)
+  if(typeof ipmRules !== 'undefined'){
+    ipmRules = ipmEntries;
+  }
+
+  // Flower schedule: anything category:'flower-event' becomes a legacy entry
+  const flowerEntries = all.filter(r => r.category === 'flower-event').map(r => ({
+    id: r.id.replace(/^flevent_/, ''),
+    dayStart: r.dayStart || null,
+    dayEnd: (r.dayEnd && r.dayEnd !== r.dayStart) ? r.dayEnd : null,
+    label: r.name || '',
+    notes: r.notes || '',
+    active: r.active !== false,
+  }));
+  S('wg_flower_schedule', flowerEntries);
+  sessionStorage.setItem('wg_flower_schedule_dirty', '1');
+  if(typeof flowerSchedule !== 'undefined'){
+    flowerSchedule = flowerEntries;
+  }
+}
+
+// ── Unified rule editor modal ──
+// Supports all four categories. Field visibility adapts to selected category.
+
+let _editingRuleId = null;
+
+function openUnifiedRuleEditor(ruleId){
+  _editingRuleId = ruleId || null;
+  const all = getRules();
+  const editing = ruleId ? all.find(r => r.id === ruleId) : null;
+  const isBaked = editing && editing.source === 'baked';
+  const canEdit = !isBaked || (loggedInMember && loggedInMember.role === 'lead');
+
+  if(isBaked && !canEdit){
+    alert('Baked-in rules can only be edited by leads.');
+    return;
+  }
+  if(isBaked){
+    if(!confirm('This is a baked-in rule from the Resin OS schedule. Editing here creates a user override that may diverge from the SOP. Proceed?')) return;
+  }
+
+  // Default rule shape for new entries
+  const r = editing ? JSON.parse(JSON.stringify(editing)) : {
+    id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    source: 'user',
+    category: 'ipm',
+    name: '',
+    product: '',
+    dose: '',
+    scope: { phase: 'flower', weekRange: null, rooms: [] },
+    cadenceType: 'every_n',
+    every: 2,
+    weekdays: [],
+    dates: [],
+    flowerDays: [],
+    dayStart: null,
+    dayEnd: null,
+    startDate: dateToIso(TODAY),
+    active: true,
+    notes: '',
+  };
+
+  // Coerce baked clone into user shape so save works
+  if(isBaked){
+    r.source = 'user';
+    if(r.id.startsWith('baked_')) r.id = 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  }
+
+  // Build the rooms checklist
+  const flowerRooms = rooms.filter(rm => rm.id);
+  const allRooms = [...IPM_SUPPORT_ROOMS, ...flowerRooms];
+  const ruleRooms = (r.scope && Array.isArray(r.scope.rooms)) ? r.scope.rooms : [];
+  const roomChecks = allRooms.map(rm => {
+    const checked = ruleRooms.includes(rm.id);
+    return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+           '<input type="checkbox" data-room="'+rm.id+'" '+(checked?'checked':'')+' style="margin:0"/>'+rm.name+'</label>';
+  }).join('');
+
+  const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const weekdayChecks = dayLabels.map((lbl,i) => {
+    const checked = r.weekdays && r.weekdays.includes(i);
+    return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px;border:1px solid var(--border2);border-radius:var(--r);background:'+(checked?'var(--blue-bg)':'var(--bg3)')+';cursor:pointer">'+
+           '<input type="checkbox" data-dow="'+i+'" '+(checked?'checked':'')+' style="margin:0"/>'+lbl+'</label>';
+  }).join('');
+
+  const ct = r.cadenceType;
+  const cat = r.category;
+  const phase = (r.scope && r.scope.phase) || 'flower';
+  // Build category buttons
+  const catBtn = (key, label) => '<button type="button" onclick="urSetCategory(\''+key+'\')" id="ur-cat-'+key+'" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:'+(cat===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
+  // Build phase buttons
+  const phaseBtn = (key, label) => '<button type="button" onclick="urSetPhase(\''+key+'\')" id="ur-phase-'+key+'" style="font-size:12px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:'+(phase===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
+
+  // Cadence-type buttons (visibility depends on category)
+  const cadBtn = (key, label) => '<button type="button" onclick="urSetCadenceType(\''+key+'\')" id="ur-cad-'+key+'" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:'+(ct===key?'var(--blue-bg)':'var(--bg3)')+';color:var(--text);cursor:pointer">'+label+'</button>';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-bg open';
+  modal.id = 'unified-rule-modal';
+  const html = '<div class="modal" style="max-width:600px">'+
+    '<div class="modal-head"><div class="modal-title">'+(editing && !isBaked ? 'Edit' : 'New')+' rule</div>'+
+    '<button class="modal-close" onclick="closeUnifiedRuleEditor()">×</button></div>'+
+    '<div class="modal-body" style="padding:18px"><div style="display:grid;gap:14px">'+
+
+    // Category
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Category</label>'+
+    '<div style="display:flex;flex-wrap:wrap;gap:5px">'+
+      catBtn('ipm','IPM spray')+catBtn('additive','Additive')+catBtn('flower-event','Flower day event')+catBtn('veg','Veg reminder')+catBtn('other','Other')+
+    '</div></div>'+
+
+    // Phase
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Phase</label>'+
+    '<div style="display:flex;flex-wrap:wrap;gap:5px">'+
+      phaseBtn('flower','Flower')+phaseBtn('veg','Vegetative')+phaseBtn('any','Any')+
+    '</div></div>'+
+
+    // Name
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Name</label>'+
+    '<input id="ur-name" value="'+(r.name||'').replace(/"/g,'&quot;')+'" placeholder="e.g. Oxiphos rotation, SuperThrive Day 3" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div>'+
+
+    // Product + Dose (hide for flower-event since those are reminders not sprays)
+    '<div id="ur-product-row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Product</label>'+
+    '<input id="ur-product" value="'+(r.product||'').replace(/"/g,'&quot;')+'" placeholder="Oxiphos / SuperThrive / Aminos" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div>'+
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Dose / mix</label>'+
+    '<input id="ur-dose" value="'+(r.dose||'').replace(/"/g,'&quot;')+'" placeholder="1 tsp/gal" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;margin-top:3px"/></div></div>'+
+
+    // Rooms (hidden when scope phase is 'veg' since 'all veg rooms' is implicit)
+    '<div id="ur-rooms-row"><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Rooms</label>'+
+    '<div id="ur-rooms" style="display:flex;flex-wrap:wrap;gap:5px">'+roomChecks+'</div>'+
+    '<div style="font-size:10px;color:var(--text3);margin-top:5px;font-style:italic">For veg-phase rules, applies to any room in veg regardless of selection.</div></div>'+
+
+    // Cadence type selector
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:5px">Cadence</label>'+
+    '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">'+
+      cadBtn('every_n','Every N days')+cadBtn('weekdays','Specific weekdays')+cadBtn('dates','Specific dates')+cadBtn('flower_day_range','Flower day range')+cadBtn('flower_day','Specific flower days')+
+    '</div>'+
+
+    // every_n block
+    '<div id="ur-cad-every_n-block" style="display:'+(ct==='every_n'?'flex':'none')+';gap:8px;align-items:center">'+
+    '<span style="font-size:12px;color:var(--text2)">Every</span>'+
+    '<input id="ur-every" type="number" min="1" max="60" value="'+(r.every||2)+'" style="width:60px;font-size:13px;padding:6px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);text-align:center"/>'+
+    '<span style="font-size:12px;color:var(--text2)">days starting</span>'+
+    '<input id="ur-start" type="date" value="'+(r.startDate||dateToIso(TODAY))+'" style="font-size:12px;padding:5px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text)"/></div>'+
+
+    // weekdays block
+    '<div id="ur-cad-weekdays-block" style="display:'+(ct==='weekdays'?'flex':'none')+';flex-wrap:wrap;gap:5px">'+weekdayChecks+'</div>'+
+
+    // dates block
+    '<div id="ur-cad-dates-block" style="display:'+(ct==='dates'?'block':'none')+'">'+
+    '<textarea id="ur-dates" placeholder="One date per line: 2026-05-12" style="width:100%;min-height:60px;font-size:12px;padding:8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box;font-family:var(--mono)">'+(r.dates||[]).join('\n')+'</textarea></div>'+
+
+    // flower_day_range block (start-end)
+    '<div id="ur-cad-flower_day_range-block" style="display:'+(ct==='flower_day_range'?'flex':'none')+';gap:8px;align-items:center">'+
+    '<span style="font-size:12px;color:var(--text2)">Flower day</span>'+
+    '<input id="ur-day-start" type="number" min="1" max="80" value="'+(r.dayStart||'')+'" placeholder="start" style="width:80px;font-size:13px;padding:6px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);text-align:center"/>'+
+    '<span style="font-size:12px;color:var(--text2)">to</span>'+
+    '<input id="ur-day-end" type="number" min="1" max="80" value="'+(r.dayEnd||'')+'" placeholder="end (optional)" style="width:90px;font-size:13px;padding:6px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);text-align:center"/></div>'+
+
+    // flower_day specific block
+    '<div id="ur-cad-flower_day-block" style="display:'+(ct==='flower_day'?'block':'none')+'">'+
+    '<input id="ur-flower-days" value="'+((r.flowerDays||[]).join(', '))+'" placeholder="Comma-separated days: 3, 7, 14" style="width:100%;font-size:13px;padding:7px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box"/></div>'+
+
+    '</div>'+
+
+    // Notes
+    '<div><label style="font-size:11px;color:var(--text3);font-weight:600">Notes</label>'+
+    '<textarea id="ur-notes" style="width:100%;min-height:50px;font-size:12px;padding:8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box">'+(r.notes||'').replace(/</g,'&lt;')+'</textarea></div>'+
+
+    // Active toggle
+    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">'+
+    '<input id="ur-active" type="checkbox" '+(r.active!==false?'checked':'')+'/>Active</label>'+
+
+    '</div>'+
+
+    // Footer buttons
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">'+
+    ((editing && !isBaked)?'<button onclick="deleteUnifiedRule(\''+r.id+'\')" style="font-size:12px;padding:7px 14px;border-radius:var(--r);border:1px solid var(--red-bg);background:none;color:var(--red);cursor:pointer">Delete</button>':'')+
+    '<button onclick="closeUnifiedRuleEditor()" style="font-size:12px;padding:7px 14px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">Cancel</button>'+
+    '<button onclick="saveUnifiedRuleFromEditor(\''+r.id+'\')" class="btn-primary" style="font-size:12px;padding:7px 14px">Save</button></div>'+
+    '</div></div>';
+
+  modal.innerHTML = html;
+  document.body.appendChild(modal);
+}
+
+function urSetCategory(cat){
+  ['ipm','additive','flower-event','veg','other'].forEach(k => {
+    const btn = document.getElementById('ur-cat-'+k);
+    if(btn) btn.style.background = (k===cat) ? 'var(--blue-bg)' : 'var(--bg3)';
+  });
+  document.getElementById('ur-cat-current') && (document.getElementById('ur-cat-current').value = cat);
+  // Auto-select sensible defaults per category
+  if(cat === 'additive' || cat === 'flower-event'){
+    // Switch phase to flower automatically
+    urSetPhase('flower');
+    // Suggest flower_day cadence for additive, flower_day_range for flower-event
+    if(cat === 'additive') urSetCadenceType('flower_day');
+    else urSetCadenceType('flower_day_range');
+  }
+  if(cat === 'veg'){
+    urSetPhase('veg');
+  }
+  // Hide product/dose row for flower-event category (it's a reminder, not a spray)
+  const prodRow = document.getElementById('ur-product-row');
+  if(prodRow) prodRow.style.display = (cat === 'flower-event') ? 'none' : 'grid';
+}
+
+function urSetPhase(phase){
+  ['flower','veg','any'].forEach(k => {
+    const btn = document.getElementById('ur-phase-'+k);
+    if(btn) btn.style.background = (k===phase) ? 'var(--blue-bg)' : 'var(--bg3)';
+  });
+  // For veg, hide the rooms picker (applies to all veg rooms implicitly)
+  const roomsRow = document.getElementById('ur-rooms-row');
+  if(roomsRow) roomsRow.style.opacity = (phase === 'veg') ? '0.5' : '1';
+}
+
+function urSetCadenceType(type){
+  ['every_n','weekdays','dates','flower_day_range','flower_day'].forEach(t => {
+    const btn = document.getElementById('ur-cad-'+t);
+    if(btn) btn.style.background = (t===type) ? 'var(--blue-bg)' : 'var(--bg3)';
+    const blk = document.getElementById('ur-cad-'+t+'-block');
+    if(blk) blk.style.display = (t===type) ? ((t==='dates' || t==='flower_day')?'block':'flex') : 'none';
+  });
+}
+
+function closeUnifiedRuleEditor(){
+  const m = document.getElementById('unified-rule-modal');
+  if(m) m.remove();
+  _editingRuleId = null;
+}
+
+function saveUnifiedRuleFromEditor(ruleId){
+  // Pull current category from the highlighted button
+  let category = 'other';
+  ['ipm','additive','flower-event','veg','other'].forEach(k => {
+    const btn = document.getElementById('ur-cat-'+k);
+    if(btn && btn.style.background === 'var(--blue-bg)') category = k;
+  });
+  let phase = 'flower';
+  ['flower','veg','any'].forEach(k => {
+    const btn = document.getElementById('ur-phase-'+k);
+    if(btn && btn.style.background === 'var(--blue-bg)') phase = k;
+  });
+  let cadenceType = 'every_n';
+  ['every_n','weekdays','dates','flower_day_range','flower_day'].forEach(t => {
+    const btn = document.getElementById('ur-cad-'+t);
+    if(btn && btn.style.background === 'var(--blue-bg)') cadenceType = t;
+  });
+
+  const name = document.getElementById('ur-name').value.trim();
+  const product = document.getElementById('ur-product').value.trim();
+  const dose = document.getElementById('ur-dose').value.trim();
+  const notes = document.getElementById('ur-notes').value.trim();
+  const active = document.getElementById('ur-active').checked;
+
+  // Rooms
+  const roomChecks = document.querySelectorAll('#ur-rooms input[type="checkbox"]:checked');
+  const selectedRooms = Array.from(roomChecks).map(cb => cb.getAttribute('data-room'));
+
+  // Cadence-specific fields
+  const data = {
+    category, name, product, dose, notes, active,
+    scope: { phase, weekRange: null, rooms: selectedRooms },
+    cadenceType,
+    every: parseInt(document.getElementById('ur-every').value) || 1,
+    weekdays: [],
+    dates: [],
+    flowerDays: [],
+    dayStart: null,
+    dayEnd: null,
+    startDate: document.getElementById('ur-start').value || null,
+  };
+
+  if(cadenceType === 'weekdays'){
+    const wcs = document.querySelectorAll('#ur-cad-weekdays-block input[type="checkbox"]:checked');
+    data.weekdays = Array.from(wcs).map(cb => parseInt(cb.getAttribute('data-dow')));
+  } else if(cadenceType === 'dates'){
+    const txt = document.getElementById('ur-dates').value;
+    data.dates = txt.split(/[\n,]/).map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
+  } else if(cadenceType === 'flower_day_range'){
+    data.dayStart = parseInt(document.getElementById('ur-day-start').value) || null;
+    data.dayEnd   = parseInt(document.getElementById('ur-day-end').value) || data.dayStart;
+  } else if(cadenceType === 'flower_day'){
+    const txt = document.getElementById('ur-flower-days').value;
+    data.flowerDays = txt.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 1 && n <= 80);
+  }
+
+  // Validation
+  if(!name){ alert('Rule name is required'); return; }
+  if(category === 'ipm' && !product){ alert('Product is required for IPM rules'); return; }
+  if(phase !== 'veg' && category !== 'flower-event' && !selectedRooms.length){
+    alert('Select at least one room (or set Phase to Veg)'); return;
+  }
+  if(cadenceType === 'weekdays' && !data.weekdays.length){ alert('Select at least one weekday'); return; }
+  if(cadenceType === 'dates' && !data.dates.length){ alert('Add at least one date'); return; }
+  if(cadenceType === 'flower_day_range' && !data.dayStart){ alert('Set a flower day start'); return; }
+  if(cadenceType === 'flower_day' && !data.flowerDays.length){ alert('Add at least one flower day'); return; }
+
+  saveUnifiedRule(ruleId, data);
+  closeUnifiedRuleEditor();
+}
+
 
 // ══════════════════════════════════════════════
 // IPM SCHEDULE — rule-based spray rotation
@@ -5578,13 +6277,29 @@ function showPage(page){
   document.getElementById('page-'+page)?.classList.add('active');
   document.querySelector(`.nav-tab[data-page="${page}"]`)?.classList.add('active');
   if(page==='settings') renderSettings();
-  if(page==='additive') renderAdditiveTable();
-  if(page==='ipm'){
-    renderIpmRules();
+
+  // Unified Rules page (replaces both Additive Schedule and IPM Schedule).
+  // 'ipm' and 'additive' are kept as silent redirects so any deep links or
+  // bookmarked legacy URLs land in the right place. Chunk 3 will remove
+  // the page-ipm and page-additive DOM entirely.
+  if(page==='rules' || page==='ipm' || page==='additive'){
+    // If user clicked an old IPM/Additive link, transparently switch them
+    // to the rules page (the nav button no longer exists, but page state
+    // may persist from server-side rendering or browser back button).
+    if(page === 'ipm' || page === 'additive'){
+      page = 'rules';
+      // Make the new "Rules" nav button look active
+      document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
+      document.querySelector('.nav-tab[data-page="rules"]')?.classList.add('active');
+      // Switch which page DOM is visible
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+      document.getElementById('page-rules')?.classList.add('active');
+    }
+    renderUnifiedRules();
     // Pull fresh data so other devices' rules show up; re-render after.
     pullConfigFromCloud(true).then(()=>{
-      renderIpmRules();
-      if(typeof renderIpmHistory==='function' && document.getElementById('ipm-history-list')){
+      renderUnifiedRules();
+      if(typeof renderIpmHistory === 'function' && document.getElementById('ipm-history-list')){
         renderIpmHistory();
       }
     }).catch(()=>{});
@@ -7619,6 +8334,7 @@ function updateFlowerScheduleEvent(i, field, val){
   flowerSchedule[i][field] = val;
   S('wg_flower_schedule', flowerSchedule);
   sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  _syncFlowerScheduleToUnified(); // bridge: mirror into unified store
   pushConfigToCloud(true);
   renderRooms(); // surface change immediately on cards
 }
@@ -7627,6 +8343,7 @@ function addFlowerScheduleEvent(){
   flowerSchedule.push({ id:'fs_'+Date.now(), dayStart:1, dayEnd:null, label:'', notes:'' });
   S('wg_flower_schedule', flowerSchedule);
   sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  _syncFlowerScheduleToUnified(); // bridge: mirror into unified store
   pushConfigToCloud(true);
   renderFlowerScheduleEditor();
 }
@@ -7636,6 +8353,7 @@ function removeFlowerScheduleEvent(id){
   flowerSchedule = flowerSchedule.filter(e=>e.id!==id);
   S('wg_flower_schedule', flowerSchedule);
   sessionStorage.setItem('wg_flower_schedule_dirty','1');
+  _syncFlowerScheduleToUnified(); // bridge: mirror into unified store
   pushConfigToCloud(true);
   renderFlowerScheduleEditor();
   renderRooms();
@@ -9831,9 +10549,14 @@ async function pullConfigFromCloud(silent=false){
       // against stale-device clobbers.
       flowerSchedule = d.flowerSchedule;
       S('wg_flower_schedule', flowerSchedule);
+      _syncFlowerScheduleToUnified(); // bridge: mirror cloud pull into unified store
       // If Settings is currently open, refresh the editor so changes appear
       if(typeof renderFlowerScheduleEditor==='function' && document.getElementById('flower-schedule-editor')){
         renderFlowerScheduleEditor();
+      }
+      // Also rerender the unified Rules page if it's open
+      if(typeof renderUnifiedRules === 'function' && document.getElementById('page-rules') && document.getElementById('page-rules').classList.contains('active')){
+        renderUnifiedRules();
       }
     }
     if(d.ipmRules&&Array.isArray(d.ipmRules)){
