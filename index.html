@@ -2663,9 +2663,211 @@ function buildAssignments(role){
   return groups;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// UNIFIED RULES — IPM, additives, vegetative, custom (Chunk 1: data layer)
+// ══════════════════════════════════════════════════════════════════
+//
+// Single storage key, single shape, single source of truth. Replaces the
+// scattered system of separate IPM rules, additive schedule (baked-in),
+// flower-week rules, and vegetative reminders.
+//
+// Shape per rule:
+//   {
+//     id: 'rule_xxx',
+//     source: 'user' | 'baked',          // 'baked' = hardcoded; lead can override
+//     category: 'ipm' | 'additive' | 'veg' | 'other',
+//     name: string,
+//     product: string,
+//     dose: string,
+//     scope: {
+//       phase: 'veg' | 'flower' | 'any',
+//       weekRange: [start, end] | null,  // null for veg/any/non-flower
+//       rooms: ['F1', ...] | 'all',
+//     },
+//     cadenceType: 'every_n' | 'weekdays' | 'dates' | 'flower_day',
+//     every: number,
+//     weekdays: number[],
+//     dates: string[],                   // ISO date strings
+//     flowerDays: number[],              // for category:'additive', days from flip
+//     startDate: ISO,
+//     active: boolean,
+//     notes: string,
+//     createdBy, createdAt, updatedAt,
+//   }
+//
+// This is Chunk 1: data layer + bridge only. No visible UI change yet.
+// The existing IPM editor / list / task-generation code still uses the old
+// ipmRules array directly. The bridge syncs writes from old → new key.
+//
+// In Chunk 2 the new UI replaces the IPM page and reads from wg_rules_v1
+// directly. In Chunk 3+ the legacy bridge code can be removed.
+
+const RULES_KEY = 'wg_rules_v1';
+const RULES_LEGACY_KEY = 'wg_ipm_rules';
+const RULES_LEGACY_BACKUP_KEY = 'wg_ipm_rules_legacy_backup';
+
+// Pull-completion gate — race-condition guard. Set to true once cloud pull
+// has returned (either successfully or definitively failed). UI guards
+// against writing rules before this is true to prevent the "fresh device
+// pushes empty array, overwrites cloud" bug.
+let _rulesPullCompleted = false;
+
+// Get all rules — user-created + baked-in. Baked-in entries are computed
+// from the ADDITIVES constant each call so code-level changes show up
+// without a migration. User rules come from localStorage.
+function getRules(){
+  const userRules = L(RULES_KEY, []);
+  const bakedRules = _buildBakedRules();
+  return [...bakedRules, ...userRules];
+}
+
+// Just user rules (excludes baked-in). Used by save paths and cloud sync.
+function getUserRules(){
+  return L(RULES_KEY, []);
+}
+
+// Build the baked-in rules from the hardcoded ADDITIVES schedule. Each
+// flower-day entry becomes one rule with category:'additive', source:'baked'.
+// These are never persisted — they're recomputed each call so updating
+// the ADDITIVES constant propagates immediately.
+function _buildBakedRules(){
+  const out = [];
+  if(typeof ADDITIVES !== 'object' || !ADDITIVES) return out;
+  Object.keys(ADDITIVES).forEach(dayStr => {
+    const day = parseInt(dayStr);
+    const a = ADDITIVES[day];
+    if(!a) return;
+    out.push({
+      id: 'baked_additive_d' + day,
+      source: 'baked',
+      category: 'additive',
+      name: a.name + ' · Day ' + day,
+      product: a.name,
+      dose: a.dose || '',
+      scope: {
+        phase: 'flower',
+        weekRange: null,
+        rooms: 'all',
+      },
+      cadenceType: 'flower_day',
+      flowerDays: [day],
+      startDate: null,
+      active: true,
+      notes: a.tier2 ? 'Tier 2 additive' : '',
+      createdBy: 'system',
+      createdAt: null,
+      updatedAt: null,
+    });
+  });
+  return out;
+}
+
+// Save the full user rules array. Sets dirty flag for cloud sync.
+function saveUserRules(rules){
+  S(RULES_KEY, rules);
+  sessionStorage.setItem('wg_rules_dirty', '1');
+}
+
+// One-time migration from wg_ipm_rules → wg_rules_v1. Runs at script load.
+// Translates the old IPM-only shape into the new unified shape with
+// category:'ipm', source:'user'. Old key is preserved as a backup for one
+// release in case rollback is needed.
+//
+// Idempotent: only runs if wg_rules_v1 doesn't exist yet. Subsequent loads
+// skip migration entirely.
+function migrateRulesV1(){
+  const alreadyMigrated = localStorage.getItem(RULES_KEY) !== null;
+  if(alreadyMigrated) return;
+  const legacy = L(RULES_LEGACY_KEY, []);
+  if(!Array.isArray(legacy)){
+    S(RULES_KEY, []);
+    return;
+  }
+  // Backup raw legacy data in case we need to roll back
+  S(RULES_LEGACY_BACKUP_KEY, legacy);
+
+  const migrated = legacy.map(r => ({
+    id: r.id || ('rule_' + Date.now() + '_' + Math.random().toString(36).slice(2,7)),
+    source: 'user',
+    category: 'ipm',
+    name: r.name || '',
+    product: r.product || '',
+    dose: r.dose || '',
+    scope: {
+      phase: 'flower',
+      weekRange: null,
+      rooms: Array.isArray(r.rooms) ? r.rooms : 'all',
+    },
+    cadenceType: r.cadenceType || 'every_n',
+    every: r.every || 1,
+    weekdays: Array.isArray(r.weekdays) ? r.weekdays : [],
+    dates: Array.isArray(r.dates) ? r.dates : [],
+    flowerDays: [],
+    startDate: r.startDate || null,
+    active: r.active !== false,
+    notes: r.notes || '',
+    createdBy: r.createdBy || 'unknown',
+    createdAt: r.createdAt || null,
+    updatedAt: r.updatedAt || null,
+  }));
+  S(RULES_KEY, migrated);
+  console.log('[rules-v1] Migrated ' + migrated.length + ' IPM rules from legacy storage');
+}
+
+// Bridge: keep wg_rules_v1 in sync with wg_ipm_rules whenever the legacy
+// save path runs. Existing saveIpmRule()/deleteIpmRule()/toggleIpmRule()
+// will continue to work as-is; this bridge mirrors their changes into the
+// unified store so when Chunk 2 swaps the reader, no data is lost.
+//
+// Called from the existing save paths via a small monkey-patch later in
+// the file. Centralized here so the translation logic stays in one place.
+function _syncLegacyToUnified(){
+  const legacy = L(RULES_LEGACY_KEY, []);
+  const current = L(RULES_KEY, []);
+  // Strip baked from current (shouldn't be persisted anyway, but defensive)
+  const currentUser = current.filter(r => r.source !== 'baked');
+  // Translate legacy rules into new shape (same as migration)
+  const translated = legacy.map(r => {
+    // If a rule with this id already exists in the unified store, preserve
+    // its non-IPM fields (scope.phase, etc) in case Chunk 2 added more.
+    const existing = currentUser.find(c => c.id === r.id);
+    const base = existing || {
+      source: 'user',
+      category: 'ipm',
+      scope: { phase: 'flower', weekRange: null, rooms: 'all' },
+      flowerDays: [],
+      createdBy: r.createdBy || 'unknown',
+      createdAt: r.createdAt || null,
+    };
+    return {
+      ...base,
+      id: r.id,
+      name: r.name || '',
+      product: r.product || '',
+      dose: r.dose || '',
+      scope: { ...base.scope, rooms: Array.isArray(r.rooms) ? r.rooms : (base.scope.rooms || 'all') },
+      cadenceType: r.cadenceType || 'every_n',
+      every: r.every || 1,
+      weekdays: Array.isArray(r.weekdays) ? r.weekdays : [],
+      dates: Array.isArray(r.dates) ? r.dates : [],
+      startDate: r.startDate || null,
+      active: r.active !== false,
+      notes: r.notes || '',
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  S(RULES_KEY, translated);
+  sessionStorage.setItem('wg_rules_dirty', '1');
+}
+
+// Run the migration NOW so wg_rules_v1 exists for any callers below.
+migrateRulesV1();
+
 // ══════════════════════════════════════════════
 // IPM SCHEDULE — rule-based spray rotation
 // ══════════════════════════════════════════════
+// Legacy data path. Chunk 2 will replace this with reads from getRules().
+// For now the bridge above keeps wg_rules_v1 in sync with every save here.
 let ipmRules=L('wg_ipm_rules',[]);
 let ipmLog=L('wg_ipm_log',[]);
 
@@ -2877,6 +3079,7 @@ function saveIpmRule(ruleId){
   if(!existing) ipmRules.push(rule);
   S('wg_ipm_rules', ipmRules);
   sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  _syncLegacyToUnified(); // bridge: mirror change into unified store
   pushConfigToCloud(true); // immediate, not debounced
   closeIpmRuleEditor();
   renderIpmRules();
@@ -2888,6 +3091,7 @@ function deleteIpmRule(ruleId){
   ipmRules=L('wg_ipm_rules',[]).filter(r=>r.id!==ruleId);
   S('wg_ipm_rules', ipmRules);
   sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  _syncLegacyToUnified(); // bridge: mirror delete into unified store
   // Immediate push (not debounced) so the delete propagates before the user
   // navigates away or refreshes. pushConfigToCloud is fire-and-forget under
   // no-cors, so we don't await — but we DO call it directly to bypass the 2s timer.
@@ -2904,6 +3108,7 @@ function toggleIpmRule(ruleId){
   r.active=!r.active;
   S('wg_ipm_rules', ipmRules);
   sessionStorage.setItem('wg_ipm_rules_dirty','1');
+  _syncLegacyToUnified(); // bridge: mirror toggle into unified store
   pushConfigToCloud(true); // immediate, not debounced
   renderIpmRules();
   renderAssignments();
@@ -9446,10 +9651,27 @@ async function pushConfigToCloud(silent=false){
   const _roomsDirty    = sessionStorage.getItem('wg_rooms_dirty')==='1';
   const _teamDirty     = sessionStorage.getItem('wg_team_dirty')==='1';
   const _rolePermsDirty= sessionStorage.getItem('wg_role_perms_dirty')==='1';
-  const _ipmRulesDirty = sessionStorage.getItem('wg_ipm_rules_dirty')==='1';
+  let _ipmRulesDirty = sessionStorage.getItem('wg_ipm_rules_dirty')==='1';
   const _ipmLogDirty   = sessionStorage.getItem('wg_ipm_log_dirty')==='1';
   const _flowerScheduleDirty = sessionStorage.getItem('wg_flower_schedule_dirty')==='1';
   const _trimQueueDirty= sessionStorage.getItem('wg_trim_queue_dirty')==='1';
+
+  // RACE-CONDITION GUARD: if rules are dirty but cloud pull hasn't completed
+  // yet, suppress pushing them. This prevents the "fresh device with empty
+  // localStorage pushes empty array, overwrites cloud rules" bug. Drop the
+  // dirty flag too so we don't burn it on a no-op push.
+  if(_ipmRulesDirty && !_rulesPullCompleted){
+    const localRules = L('wg_ipm_rules', []);
+    if(!Array.isArray(localRules) || localRules.length === 0){
+      console.warn('[Rules] Suppressing push of empty ipmRules — pull has not completed. ' +
+                   'This prevents fresh devices from wiping cloud data.');
+      _ipmRulesDirty = false; // Skip ipmRules from this push; dirty stays set in sessionStorage
+      // Note: we intentionally do NOT clear the sessionStorage dirty flag here.
+      // It will get re-evaluated and pushed normally on the next debounce cycle
+      // (by which point pull should have completed).
+    }
+  }
+
   const payload={
     action:'setConfig',
     data:{
@@ -9493,11 +9715,17 @@ async function pushConfigToCloud(silent=false){
 }
 
 async function pullConfigFromCloud(silent=false){
-  if(!gsUrl) return false;
+  if(!gsUrl){
+    _rulesPullCompleted = true; // no cloud configured — don't block rule edits
+    return false;
+  }
   try{
     const res=await fetch(gsUrl+'?action=getConfig&t='+Date.now());
     const json=await res.json();
-    if(!json.ok||!json.data) return false;
+    if(!json.ok||!json.data){
+      _rulesPullCompleted = true; // pull came back empty — local data is the source of truth
+      return false;
+    }
     const d=json.data;
 
     // Rooms — cloud wins ONLY when cloud has a real value. Empty strings, nulls, and
@@ -9617,6 +9845,7 @@ async function pullConfigFromCloud(silent=false){
       // stale local copy.
       ipmRules = d.ipmRules;
       S('wg_ipm_rules', ipmRules);
+      _syncLegacyToUnified(); // bridge: mirror cloud pull into unified store
       // Re-render if the IPM page is currently open
       if(typeof renderIpmRules==='function' && document.getElementById('page-ipm') && document.getElementById('page-ipm').classList.contains('active')){
         renderIpmRules();
@@ -9700,12 +9929,25 @@ async function pullConfigFromCloud(silent=false){
     }
 
     if(!silent) console.log('[Config] Pulled from cloud, synced by',d.syncedBy);
+    _rulesPullCompleted = true; // pull succeeded — rule edits are now safe to push
     return true;
   }catch(e){
     if(!silent) console.warn('[Config] Pull failed:',e);
+    _rulesPullCompleted = true; // pull failed — don't block rule edits forever
     return false;
   }
 }
+
+// Safety net: if no cloud pull has completed within 2 seconds of page load,
+// release the rule-edit gate anyway. Prevents the UI from being stuck
+// disabled if gsUrl is misconfigured or network is unreachable. Pull
+// success/failure will still flip the gate when it eventually resolves.
+setTimeout(() => {
+  if(!_rulesPullCompleted){
+    _rulesPullCompleted = true;
+    console.warn('[Rules] Pull-completion gate released by safety timeout (2s)');
+  }
+}, 2000);
 
 // Auto-push config whenever lead changes key settings
 function pushConfigDebounced(){
