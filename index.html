@@ -7540,6 +7540,16 @@ function computeDurationChange(p, a, shotCount, overnightTarget, currentSec, pha
   // Threshold: don't recommend if within 2 seconds
   if(Math.abs(deltaSec) < 2) return null;
 
+  // Noise filter: the 2-second threshold can fire on rounding boundaries
+  // when the actual per-shot delivery delta is sub-tenth-of-a-percent
+  // (e.g. 3.3%/shot vs 3.2%/shot model = 0.1% delta but 2s rounding nudge).
+  // Require at least 0.3% per-shot delivery delta to consider a real miss.
+  if(p.onePercentShotSize){
+    const currentPerShotPct = currentSec / p.onePercentShotSize;
+    const idealPerShotPct = budget.perShotPct;
+    if(Math.abs(currentPerShotPct - idealPerShotPct) < 0.3) return null;
+  }
+
   // Cap at 2× current duration (or 0.5× when reducing). Anything beyond
   // that ceiling is a sign the duration alone can't close the gap, and
   // the caller should let frequency cover the rest.
@@ -11442,6 +11452,15 @@ function _tr_detectConfigDrift(programs){
       drifts.push(`${label} varies (${uniq.join('/')}%)`);
     }
   });
+  // P2 active/inactive split — same room, different irrigation strategies.
+  // p2Active === false is explicit Growlink-toggle-off; null/undefined = on.
+  const p2States = tnums.map(t => programs[t].p2Active === false ? 'off' : 'on');
+  const uniqP2 = Array.from(new Set(p2States));
+  if(uniqP2.length > 1){
+    const offTables = tnums.filter(t => programs[t].p2Active === false);
+    const onTables = tnums.filter(t => programs[t].p2Active !== false);
+    drifts.push(`P2 is OFF on table${offTables.length>1?'s':''} ${offTables.join(',')} but ON on table${onTables.length>1?'s':''} ${onTables.join(',')}`);
+  }
   if(!drifts.length) return null;
   return 'Tables in this room run different configs: ' + drifts.join(', ') + '. Tuning each table independently.';
 }
@@ -11554,10 +11573,32 @@ function _tr_detectScheduleSanityIssues(p){
     }
   }
 
+  // ── Check 5: P1 ends in the early morning hours ──
+  // Distinct from Check 1 (which catches end-time TYPOS by reconciling with
+  // start + quantity × interval). Here we flag the OPERATIONAL problem:
+  // even when the entered values are self-consistent, a P1 ramp configured
+  // to end after midnight collapses the overnight dryback window. Example:
+  // Room 8 T1 has 21 shots × 45min from 09:00 — math reconciles to 00:00:45,
+  // Check 1 stays quiet, but the room can't get a real overnight dryback.
+  //
+  // The threshold: P1 ending later than 23:00 OR within 4h of lights-on is
+  // operationally wrong. Cadence rooms get a pass — their whole day IS the
+  // ramp, by design.
+  if(!cadence && p1End != null && lightsOn != null){
+    // Compute hours from P1 end to lights-on, handling midnight wrap
+    let p1EndToLightsOnMin = lightsOn - p1End;
+    if(p1EndToLightsOnMin < 0) p1EndToLightsOnMin += 24*60;
+    // P1 ending past 23:00 (i.e. minutes >= 23*60) OR less than ~6h before lights-on
+    const endsAfter23 = (p1End >= 23*60 || p1End < 6*60);
+    const tooCloseToLightsOn = p1EndToLightsOnMin < 6*60;
+    if(endsAfter23 || tooCloseToLightsOn){
+      const display = p.rampEnd.replace(/:\d{2}$/, '');
+      issues.push(`P1 is configured to end at <b>${display}</b> — that's only ${(p1EndToLightsOnMin/60).toFixed(1)}h before lights-on. P1 should complete during the photoperiod so the substrate has time to dry back before lights-off → overnight. Consider fewer P1 shots, a shorter interval, or moving some load to P2.`);
+    }
+  }
+
   return issues;
 }
-
-// Render one table's analysis block: P1, P2, P0 with verdicts and recommendations.
 function _tr_renderTableBlock(a){
   const p = a.program;
   const cadence = isCadenceMode(p);
@@ -12085,12 +12126,75 @@ function _tr_renderP1Block(a){
     // more drippers on uneven plants over time.
     const fbGap = (fDiff != null && bDiff != null) ? Math.abs(r.fEnd - r.bEnd) : 0;
     const NOTABLE_GAP_PCT = 8;
+    // Suppress tuning recs when F/B spread exceeds 8% — per DD 2.2 §3.A.14,
+    // that threshold is "intervention required, identify cause before adjusting
+    // anything." Tuning the average across a 10-20% spread starves the dry
+    // side or floods the wet side. The flag is still shown below as context.
+    const SUPPRESS_TUNING_GAP_PCT = 8;
 
     const avgEnd = (r.fEnd != null && r.bEnd != null) ? (r.fEnd + r.bEnd) / 2
                   : (r.fEnd != null ? r.fEnd : r.bEnd);
     const avgDiff = (avgEnd != null) ? avgEnd - target : null;
 
+    // Single-probe fallback flag — surface that the rec is based on one
+    // sensor only. Operators should know the avg isn't a two-probe consensus.
+    const singleProbeFallback = (r.fEnd != null && r.bEnd == null)
+      ? 'B'
+      : (r.bEnd != null && r.fEnd == null ? 'F' : null);
+    if(singleProbeFallback){
+      lines.push({sev:'info', text:`${singleProbeFallback} sensor missing for P1 endpoint — rec based on ${singleProbeFallback === 'B' ? 'F' : 'B'} only. Confirm sensor health before applying.`});
+    }
+
+    // Sensor ceiling detection. TEROS-12 in coco saturates near 0.60 m³/m³
+    // (60%); readings above ~75% are typically clamped at the sensor's
+    // measurement ceiling, not real saturation. If either probe reads ≥80%
+    // at endpoint, the avg isn't trustworthy and tuning off it is fictional.
+    const SENSOR_CEILING_PCT = 80;
+    const fAtCeiling = r.fEnd != null && r.fEnd >= SENSOR_CEILING_PCT;
+    const bAtCeiling = r.bEnd != null && r.bEnd >= SENSOR_CEILING_PCT;
+    if(fAtCeiling || bAtCeiling){
+      const which = fAtCeiling && bAtCeiling ? 'Both probes' : (fAtCeiling ? 'F probe' : 'B probe');
+      lines.push({sev:'info', text:`⚠ ${which} reading ≥${SENSOR_CEILING_PCT}% — likely at sensor measurement ceiling, not real VWC. Substrate is saturated past the probe's range. <b>Holding tuning rec until readings recover</b>; if this persists, check probe calibration or substrate condition.`});
+    }
+
     if(p.rampUpShotSize && p.quantity && avgDiff != null){
+      // ────────────────────────────────────────────────────────
+      // Tuning-rec gates: don't issue a recommendation when…
+      // ────────────────────────────────────────────────────────
+      //   (a) |avgDiff| < 2%: per-probe display says "✓ on target" at this
+      //       threshold; rec should match so we don't contradict ourselves.
+      //   (b) sensor at ceiling: the avg is unreliable (see flag above).
+      //   (c) F/B spread ≥ 8%: DD 2.2 §3.A.14 says intervention required
+      //       before tuning; tuning the avg across a big spread starves
+      //       one side.
+      const recSuppressedByThreshold = Math.abs(avgDiff) < 2;
+      const recSuppressedBySensor = (fAtCeiling || bAtCeiling);
+      const recSuppressedBySpread = (fbGap >= SUPPRESS_TUNING_GAP_PCT);
+      const recSuppressed = recSuppressedByThreshold || recSuppressedBySensor || recSuppressedBySpread;
+
+      if(recSuppressed){
+        if(recSuppressedBySensor){
+          // Sensor-ceiling message already pushed above — nothing more to do
+        } else if(recSuppressedBySpread){
+          // F/B spread flag already pushed below, but we want to be explicit
+          // that this is why we're not tuning. Use an action-severity message
+          // so the operator sees it (info messages are quieter).
+          const drier = (r.fEnd != null && r.bEnd != null) ? (r.fEnd < r.bEnd ? 'F' : 'B') : '?';
+          lines.push({sev:'action', text:`<b>Hold ${p.quantity} P1 events</b> — F/B spread is ${fbGap.toFixed(1)}%, intervention threshold per DD 2.2 §3.A.14. <span style="color:var(--amber)">⚠ Identify cause (dripper seating on ${drier} side, canopy blocking emitters, table slope, sensor placement) before changing the program. Tuning the average across this spread will starve the dry side or flood the wet side.</span>`});
+        } else if(recSuppressedByThreshold){
+          // Both probes within tolerance of target. Mirror the per-probe
+          // display: green check, no action.
+          const worstProbeDiff = Math.max(
+            fDiff != null ? Math.abs(fDiff) : 0,
+            bDiff != null ? Math.abs(bDiff) : 0
+          );
+          if(worstProbeDiff >= 5){
+            lines.push({sev:'info', text:`Average on target — but one probe is ${worstProbeDiff.toFixed(1)}% off. Table-wide rec holds, but see F/B spread flag below.`});
+          } else {
+            lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
+          }
+        }
+      } else {
       // ────────────────────────────────────────────────────────
       // P1 RECOMMENDATION — narrative format with rescue anchoring
       // ────────────────────────────────────────────────────────
@@ -12161,7 +12265,18 @@ function _tr_renderP1Block(a){
       const fmtTimeFromRamp = (qty) => shotFireTime(p.rampStart, qty, p.rampUpShotInterval) || '?';
 
       if(neededShots === p.quantity && !rescue.fired){
-        lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
+        // Average is on target — but if a single probe is materially off
+        // (>5% from target), that's not a clean "on target" outcome. Surface
+        // the unevenness so operators don't dismiss the table.
+        const worstProbeDiff = Math.max(
+          fDiff != null ? Math.abs(fDiff) : 0,
+          bDiff != null ? Math.abs(bDiff) : 0
+        );
+        if(worstProbeDiff >= 5){
+          lines.push({sev:'info', text:`Average on target — but one probe is ${worstProbeDiff.toFixed(1)}% off. Table-wide rec holds, but see F/B spread flag below.`});
+        } else {
+          lines.push({sev:'ok', text:`✓ P1 ramp is on target — no adjustment needed.`});
+        }
       } else {
         // Action sentence
         let action;
@@ -12203,6 +12318,7 @@ function _tr_renderP1Block(a){
         const fullText = `${action} ${storyParts.join(' ')} ${justification}`;
         lines.push({sev:'action', text: fullText});
       }
+      } // close `else` for tuning-rec gates
     }
 
     // Note F/B spread as context only — no action implied. The crew can't
@@ -12296,7 +12412,15 @@ function _tr_renderP2Block(a){
     const durationChange = (p.maintenanceDurationSec && p.onePercentShotSize && totalShots)
       ? computeDurationChange(p, a, totalShots, overnightTargetForBudget, p.maintenanceDurationSec, 'p2')
       : null;
-    const durationOpt = durationChange ? {
+    // ── SIGN-AWARE DURATION OPTION ──
+    // The daily-budget model uses program TARGET dryback as ground truth.
+    // When measured dryback is UNDER target (substrate held too much water),
+    // the model still recommends longer duration to "hit target volume per
+    // shot" — but that's the wrong direction operationally. The substrate
+    // is already over-watered; we need less water, not more. Skip duration
+    // and let interval carry the correction.
+    const drybackTooDeep = diff > 0;
+    const durationOpt = (durationChange && drybackTooDeep) ? {
       currentSec: durationChange.currentSec,
       newSec: durationChange.newSec,
       hitFloor: durationChange.hitFloor,
@@ -12443,7 +12567,17 @@ function _tr_renderP0Block(a){
     const durationChange = (lastShotDurSec && p.onePercentShotSize && shotCountForBudget)
       ? computeDurationChange(p, a, shotCountForBudget, target, lastShotDurSec, p2IsOff ? 'p1' : 'p2')
       : null;
-    const durationOpt = durationChange ? {
+    // ── SIGN-AWARE DURATION OPTION ──
+    // The daily-budget model always solves "ideal seconds to hit target
+    // dryback." When measured dryback is UNDER target (substrate held too
+    // much water), the model still recommends more water — which is the
+    // opposite of what's needed. Only offer duration when measured exceeded
+    // target (dried too far → genuinely need more water per shot).
+    //
+    // When diff < 0 (held too much), durationOpt is null and the rec falls
+    // through to frequency-only (remove a shot), which is correct.
+    const drybackTooDeep = diff > 0;
+    const durationOpt = (durationChange && drybackTooDeep) ? {
       currentSec: durationChange.currentSec,
       newSec: durationChange.newSec,
       hitFloor: durationChange.hitFloor,
@@ -12470,6 +12604,24 @@ function _tr_renderP0Block(a){
       lines.push({sev:'action', text});
     } else {
       lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
+    }
+
+    // ── PHASE-SHAPE DIAGNOSTIC ──
+    // If P0 dried PAST target AND P2 was shallow (under its own target),
+    // the day was over-watered during P2 cycles but under-supported after
+    // the last P2 shot. The shape of the day is wrong: too much mid-day
+    // water, then a long gap to lights-on. The right fix isn't more water
+    // across every shot — it's extending the P2 window or adding one
+    // trailing P2 shot to shorten the gap. Surface this as context so
+    // the operator doesn't blindly add water to a table that's already
+    // over-watered during the day.
+    if(!p2IsOff && diff > 2 && a.p2 && a.p2.avgDryback != null && p.maintenanceDryback != null){
+      const p2Diff = a.p2.avgDryback - p.maintenanceDryback;
+      if(p2Diff < -1){
+        // Compute the gap from last P2 to lights-on for the operator
+        const lightsOnStr = (p.lightsOnTime || '08:00').replace(/:\d{2}$/, '');
+        lines.push({sev:'info', text:`Phase-shape note: P2 was ${(-p2Diff).toFixed(1)}% shallow but P0 dried ${diff.toFixed(1)}% past target. The day held too much water mid-day, then dried too far after the last P2 at ${endTimeForRec}. Before adding water everywhere, consider extending the P2 window later (e.g. add 1 trailing P2 shot closer to ${lightsOnStr}) — that closes the gap without flooding the day.`});
+      }
     }
   } else {
     lines.push({sev:'ok', text:`✓ Overnight dryback on target — no adjustment needed.`});
