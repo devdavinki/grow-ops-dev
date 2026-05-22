@@ -3422,7 +3422,7 @@ function toggleUnifiedRule(ruleId){
 function _syncUnifiedToLegacy(){
   const all = getUserRules();
   // IPM rules: anything category:'ipm' becomes a legacy ipm rule
-  const ipmEntries = all.filter(r => r.category === 'ipm').map(r => {
+  const ipmEntries = all.filter(r => r.category === 'ipm' || r.category === 'veg').map(r => {
     // Expand auto:in-veg into the current set of in-veg flower rooms when
     // writing to legacy. The task-generation code reads rule.rooms directly
     // and doesn't understand auto markers, so we resolve here. The downside
