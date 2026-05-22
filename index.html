@@ -3421,7 +3421,11 @@ function toggleUnifiedRule(ruleId){
 // generation code and other readers keep working in chunk 2.
 function _syncUnifiedToLegacy(){
   const all = getUserRules();
-  // IPM rules: anything category:'ipm' becomes a legacy ipm rule
+  // IPM rules: anything category:'ipm' becomes a legacy ipm rule.
+  // Veg rules (category:'veg') ride the same legacy IPM path — they use the
+  // same cadence types (every_n/weekdays/dates) and getIpmTasksForToday()
+  // already resolves auto:in-veg rooms, so they generate tasks identically.
+  // They'll show with the IPM badge/styling, which is acceptable for now.
   const ipmEntries = all.filter(r => r.category === 'ipm' || r.category === 'veg').map(r => {
     // Expand auto:in-veg into the current set of in-veg flower rooms when
     // writing to legacy. The task-generation code reads rule.rooms directly
@@ -3878,18 +3882,55 @@ function ipmRuleHandledOn(rule, dateIso, roomId){
   return ipmLog.some(l => l.ruleId===rule.id && l.date===dateIso && (!roomId || l.roomId===roomId));
 }
 
+// Does a room's current live stage satisfy a rule's intended phase?
+// This is the guard that prevents a flower rule from emitting tasks for a
+// room that's currently in veg (and vice versa). Stages map to phases as:
+//   veg                          → 'veg'
+//   flower / late / harvest      → 'flower'
+//   empty                        → neither (no tasks)
+// A rule with phase:'any' matches both veg and flower stages.
+function _roomMatchesRulePhase(roomId, rulePhase){
+  const room = getIpmRoom(roomId);
+  if(!room) return false;
+  // Support rooms (Mother, Veg, Clones, Dry) aren't flower rooms and have no
+  // flip cycle — they're permanent veg-side fixtures. Treat them as 'veg'
+  // so veg/any rules hit them and flower rules don't.
+  const isSupportRoom = IPM_SUPPORT_ROOMS.some(r => r.id === roomId);
+  const stage = isSupportRoom ? 'veg' : getStage(room);
+  if(stage === 'empty') return false;
+  const roomPhase = (stage === 'veg') ? 'veg' : 'flower';
+  if(rulePhase === 'any') return true;
+  return rulePhase === roomPhase;
+}
+
+// Chunk 3: task generation reads the UNIFIED store directly and resolves
+// rooms live at call time, instead of the frozen wg_ipm_rules mirror.
+// This kills the staleness bug where a flower rule kept emitting tasks for
+// a room that had since flipped back to veg, because the legacy mirror had
+// baked in the room id at last sync. Now auto:in-flower / auto:in-veg
+// re-resolve every call, and a per-room phase guard rejects any room whose
+// current stage doesn't match the rule's phase.
 function getIpmTasksForToday(){
-  ipmRules=L('wg_ipm_rules',[]);
   ipmLog=L('wg_ipm_log',[]);
   const out=[];
-  ipmRules.forEach(rule=>{
-    if(!rule.active) return;
-    if(!Array.isArray(rule.rooms) || !rule.rooms.length) return;
+  // Pull IPM + veg rules straight from the unified store (source of truth).
+  const rules = getUserRules().filter(r =>
+    (r.category === 'ipm' || r.category === 'veg') && r.active
+  );
+  rules.forEach(rule=>{
+    const rulePhase = (rule.scope && rule.scope.phase) || 'flower';
+    const rawRooms = (rule.scope && Array.isArray(rule.scope.rooms)) ? rule.scope.rooms : [];
+    // Resolve markers (auto:in-veg / auto:in-flower) to live room ids NOW.
+    const resolvedRooms = resolveRuleRooms(rawRooms);
+    if(!resolvedRooms.length) return;
+    // Phase guard: drop any room whose current stage doesn't match the rule.
+    const eligibleRooms = resolvedRooms.filter(rid => _roomMatchesRulePhase(rid, rulePhase));
+    if(!eligibleRooms.length) return;
     for(let back=0; back<=7; back++){
       const d=new Date(TODAY); d.setDate(d.getDate()-back);
       const due=isIpmRuleDueOn(rule, d);
       if(!due) continue;
-      rule.rooms.forEach(roomId=>{
+      eligibleRooms.forEach(roomId=>{
         if(ipmRuleHandledOn(rule, due.dueDate, roomId)) return;
         out.push({rule, roomId, dueDate:due.dueDate, daysOverdue:back});
       });
@@ -3902,8 +3943,19 @@ function getIpmTasksForToday(){
   return out;
 }
 
+// Resolve a rule by id for done/skip logging. Checks the unified store
+// first (source of truth — covers veg rules and rules whose legacy mirror
+// is stale or empty), then falls back to the legacy ipmRules array.
+function _findIpmRuleById(ruleId){
+  if(typeof getRules === 'function'){
+    const u = getRules().find(r => r.id === ruleId);
+    if(u) return u;
+  }
+  return (ipmRules || []).find(r => r.id === ruleId) || null;
+}
+
 function markIpmDone(ruleId, roomId, dueDate, note){
-  const rule=ipmRules.find(r=>r.id===ruleId);
+  const rule=_findIpmRuleById(ruleId);
   if(!rule) return;
   ipmLog.push({
     id:Date.now()+'_'+Math.random().toString(36).slice(2,7),
@@ -3922,7 +3974,7 @@ function markIpmDone(ruleId, roomId, dueDate, note){
 }
 
 function markIpmSkip(ruleId, roomId, dueDate, reason){
-  const rule=ipmRules.find(r=>r.id===ruleId);
+  const rule=_findIpmRuleById(ruleId);
   if(!rule) return;
   if(!reason){
     reason=prompt('Reason for skipping (optional):','')||'';
