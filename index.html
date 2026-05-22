@@ -5687,12 +5687,19 @@ if(_storedVersion !== APP_VERSION) {
 
 // ── TEAM INITIALIZATION
 let team=L('wg_team',null);
+// Tombstones: names the lead has explicitly removed. The re-seed loop below
+// must NOT resurrect these from DEFAULT_TEAM. Devon is never tombstonable
+// (break-glass lead account), enforced in removeTeamMember.
+let _deletedTeamNames=L('wg_team_deleted',[]);
 const _needsReset = !team || team.length===0 || team.every(m=>!m.agtId) ||
   !team.find(m=>m.name==='Devon'&&m.role==='lead'&&m.agtId==='005963');
 if(_needsReset){
   team=DEFAULT_TEAM.slice(); S('wg_team',team);pushConfigDebounced();
 } else {
   DEFAULT_TEAM.forEach(dt=>{
+    // Skip anyone the lead has explicitly deleted — except Devon, who is the
+    // guaranteed lead account and must always be present.
+    if(dt.name!=='Devon' && _deletedTeamNames.includes(dt.name)) return;
     const ex=team.find(m=>m.name===dt.name);
     if(!ex){ team.push(dt); }
     else {
@@ -5758,10 +5765,57 @@ function addTeamMember(){
 }
 
 function removeTeamMember(id){
+  const member=team.find(m=>m.id===id);
+  if(!member) return;
+  // Devon is the guaranteed lead account — never removable.
+  if(member.name==='Devon'){
+    alert('Devon is the protected lead account and cannot be removed.');
+    return;
+  }
+  // Record a tombstone by name so the DEFAULT_TEAM re-seed on next load
+  // doesn't resurrect this person.
+  if(member.name && !_deletedTeamNames.includes(member.name)){
+    _deletedTeamNames.push(member.name);
+    S('wg_team_deleted',_deletedTeamNames);
+    sessionStorage.setItem('wg_team_dirty','1');
+  }
   team=team.filter(m=>m.id!==id);
   S('wg_team',team);
   S('wg_team_edited_at',Date.now());
   sessionStorage.setItem('wg_team_dirty','1');
+  pushConfigToCloud(true);
+  renderTeamRoster();
+}
+
+// Move a roster member up or down. The team array order IS the sign-in list
+// order (top of array = top of sign-in list), so reordering is just a swap.
+// dir is -1 (up) or +1 (down).
+function moveTeamMember(id, dir){
+  const i=team.findIndex(m=>m.id===id);
+  if(i<0) return;
+  const j=i+dir;
+  if(j<0 || j>=team.length) return; // already at an edge
+  const tmp=team[i]; team[i]=team[j]; team[j]=tmp;
+  S('wg_team',team);
+  S('wg_team_edited_at',Date.now());
+  sessionStorage.setItem('wg_team_dirty','1');
+  pushConfigToCloud(true);
+  renderTeamRoster();
+}
+
+// Clear a single tombstone so DEFAULT_TEAM can re-add that person on next
+// load (used if a lead wants to bring back someone they deleted earlier).
+function restoreDeletedMember(name){
+  _deletedTeamNames=_deletedTeamNames.filter(n=>n!==name);
+  S('wg_team_deleted',_deletedTeamNames);
+  sessionStorage.setItem('wg_team_dirty','1');
+  // Re-add from DEFAULT_TEAM immediately if present there.
+  const dt=DEFAULT_TEAM.find(m=>m.name===name);
+  if(dt && !team.find(m=>m.name===name)){
+    team.push({...dt});
+    S('wg_team',team);
+    S('wg_team_edited_at',Date.now());
+  }
   pushConfigToCloud(true);
   renderTeamRoster();
 }
@@ -5792,10 +5846,19 @@ function renderTeamRoster(){
   team.forEach((member,i)=>{
     const cell=document.createElement('div');
     cell.className='setting-cell';
+    const isFirst=i===0, isLast=i===team.length-1;
+    const upBtn=`<button onclick="moveTeamMember('${member.id}',-1)" ${isFirst?'disabled':''} title="Move up" style="font-size:13px;line-height:1;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:${isFirst?'var(--text3)':'var(--text2)'};cursor:${isFirst?'default':'pointer'};opacity:${isFirst?'0.4':'1'}">▲</button>`;
+    const downBtn=`<button onclick="moveTeamMember('${member.id}',1)" ${isLast?'disabled':''} title="Move down" style="font-size:13px;line-height:1;padding:3px 7px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:${isLast?'var(--text3)':'var(--text2)'};cursor:${isLast?'default':'pointer'};opacity:${isLast?'0.4':'1'}">▼</button>`;
     cell.innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:700;color:var(--text)">${member.name||'New member'}</div>
-        <button onclick="removeTeamMember('${member.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;font-weight:600;color:var(--text3);font-family:var(--mono);min-width:18px">#${i+1}</span>
+          <div style="font-size:13px;font-weight:700;color:var(--text)">${member.name||'New member'}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px">
+          ${upBtn}${downBtn}
+          <button onclick="removeTeamMember('${member.id}')" style="font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--red-dim);background:none;color:var(--red);cursor:pointer">Remove</button>
+        </div>
       </div>
       <label>Name</label>
       <input value="${member.name||''}" placeholder="Full name" onchange="team[${i}].name=this.value;S('wg_team',team);S('wg_team_edited_at',Date.now());sessionStorage.setItem('wg_team_dirty','1');pushConfigToCloud(true);renderTeamRoster()"/>
@@ -5808,6 +5871,21 @@ function renderTeamRoster(){
     `;
     grid.appendChild(cell);
   });
+
+  // Restore strip: show anyone the lead has deleted who exists in DEFAULT_TEAM,
+  // with a one-tap restore. Lets deletion be reversible without touching storage.
+  const restorable=_deletedTeamNames.filter(n=>DEFAULT_TEAM.find(m=>m.name===n));
+  let strip=document.getElementById('team-restore-strip');
+  if(strip) strip.remove();
+  if(restorable.length){
+    strip=document.createElement('div');
+    strip.id='team-restore-strip';
+    strip.style.cssText='margin-top:6px;padding:8px 10px;border:1px dashed var(--border2);border-radius:var(--r);font-size:11px;color:var(--text3)';
+    strip.innerHTML='Removed: '+restorable.map(n=>
+      `<button onclick="restoreDeletedMember('${n.replace(/'/g,"\\'")}')" style="font-size:11px;padding:2px 8px;margin:2px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↩ ${n}</button>`
+    ).join(' ');
+    grid.parentNode.insertBefore(strip, grid.nextSibling);
+  }
 }
 
 function renderRolePermissions(){
@@ -10741,6 +10819,7 @@ async function pushConfigToCloud(silent=false){
     data:{
       ...(_roomsDirty ? {rooms} : {}),
       ...(_teamDirty  ? {team}  : {}),
+      ...(_teamDirty  ? {deletedTeamNames: L('wg_team_deleted',[])} : {}),
       ...(_rolePermsDirty ? {rolePerms} : {}),
       gsUrl,
       ...(_ipmRulesDirty ? {ipmRules: L('wg_ipm_rules',[])} : {}),
@@ -10835,6 +10914,20 @@ async function pullConfigFromCloud(silent=false){
       const cloudSyncedAtTeam=d.syncedAt?new Date(d.syncedAt).getTime():0;
       const localTeamEditAt=L('wg_team_edited_at',0);
       if(localTeamEditAt<=cloudSyncedAtTeam){ team=d.team; S('wg_team',team); }
+    }
+    // Tombstones merge as a UNION across devices — if any device removed
+    // someone, that deletion should hold everywhere. Devon is never honored
+    // as a tombstone (protected lead account).
+    if(Array.isArray(d.deletedTeamNames)){
+      const merged=new Set([..._deletedTeamNames, ...d.deletedTeamNames]);
+      merged.delete('Devon');
+      _deletedTeamNames=[...merged];
+      S('wg_team_deleted',_deletedTeamNames);
+      // Enforce the union against the freshly-merged roster too, so a name
+      // tombstoned on another device drops out here without a reload.
+      const before=team.length;
+      team=team.filter(m=>m.name==='Devon' || !_deletedTeamNames.includes(m.name));
+      if(team.length!==before) S('wg_team',team);
     }
     if(d.rolePerms){
       rolePerms=d.rolePerms;
