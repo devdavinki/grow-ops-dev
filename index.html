@@ -14183,9 +14183,9 @@ function openPkgModal(i){
   document.getElementById('pkg-qty').value='';
   document.getElementById('pkg-packaged-line').textContent='';
   pkgCheckStart(); pkgCheckFinal(); pkgUpdateSubmitState();
-  document.getElementById('pkg-modal-bg').classList.add('active');
+  document.getElementById('pkg-modal-bg').classList.add('open');
 }
-function closePkgModal(){ document.getElementById('pkg-modal-bg').classList.remove('active'); _orderState.current=null; }
+function closePkgModal(){ document.getElementById('pkg-modal-bg').classList.remove('open'); _orderState.current=null; }
 
 // Start-weight check vs current Weekly Menu grams. Flags >30g.
 function pkgCheckStart(){
