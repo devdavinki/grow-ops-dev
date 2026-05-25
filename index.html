@@ -409,6 +409,7 @@ button { cursor: pointer; }
 <!-- NAV -->
 <div class="nav" id="main-nav">
   <button class="nav-tab active" onclick="showPage('assignments')" data-page="assignments" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">My Tasks</button>
+  <button class="nav-tab" onclick="showPage('order')" data-page="order" data-roles="lead,postprod">Order</button>
   <button class="nav-tab" onclick="showPage('rooms')" data-page="rooms" data-roles="lead,defoliator,fertigator,cloner,ipm">Rooms</button>
   <button class="nav-tab" onclick="showPage('postprod')" data-page="postprod" data-roles="lead,postprod">Post Production</button>
   <button class="nav-tab" onclick="showPage('clonetracker')" data-page="clonetracker" data-roles="lead,cloner">Clone Tracker</button>
@@ -924,6 +925,7 @@ button { cursor: pointer; }
       <div class="metrc-upload-cell" id="mup-vegetative"><div class="metrc-upload-label">Vegetative</div><div class="metrc-upload-status" id="mup-vegetative-status">Not loaded</div></div>
       <div class="metrc-upload-cell" id="mup-flowering"><div class="metrc-upload-label">Flowering</div><div class="metrc-upload-status" id="mup-flowering-status">Not loaded</div></div>
       <div class="metrc-upload-cell" id="mup-harvests"><div class="metrc-upload-label">Harvests</div><div class="metrc-upload-status" id="mup-harvests-status">Not loaded</div></div>
+      <div class="metrc-upload-cell" id="mup-packages"><div class="metrc-upload-label">Packages (pre-roll)</div><div class="metrc-upload-status" id="mup-packages-status">Not loaded</div></div>
     </div>
 
     <!-- GROWLINK CSV BACKFILL -->
@@ -1077,9 +1079,14 @@ button { cursor: pointer; }
       <div id="metrc-clones-grid" class="grid-3"></div>
     </div>
     <div id="metrc-sub-strains" style="display:none">
-      <div style="margin-bottom:12px">
+      <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <input id="metrc-strain-search" type="text" placeholder="Search by strain or code..." 
-          style="width:100%;max-width:320px;font-size:13px" oninput="renderMetrcStrains()"/>
+          style="flex:1;min-width:200px;max-width:320px;font-size:13px" oninput="renderMetrcStrains()"/>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="font-size:11px;color:var(--text3);font-weight:600">Sort:</span>
+          <button id="metrc-strain-sort-az" onclick="setStrainSort('az')" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--blue-bg);color:var(--text);cursor:pointer">A→Z</button>
+          <button id="metrc-strain-sort-priority" onclick="setStrainSort('priority')" style="font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer">Lowest stock first</button>
+        </div>
       </div>
       <div id="metrc-strains-grid" class="grid-3"></div>
     </div>
@@ -1224,6 +1231,60 @@ button { cursor: pointer; }
       </div>
     </div>
     <div id="tuning-report-wrap"></div>
+  </div>
+
+  <!-- ══ PAGE: ORDER (packaging) ══ -->
+  <div id="page-order" class="page">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div>
+        <div class="section-title">Order &amp; packaging</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px" id="order-sub">Work each order top to bottom. Enter weights as you go.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button onclick="renderOrders()" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+        <span id="order-status" style="font-size:11px;color:var(--text3)"></span>
+      </div>
+    </div>
+    <div id="order-list" style="display:grid;gap:10px;margin-bottom:1.5rem"></div>
+  </div>
+
+  <!-- PACKAGING MODAL -->
+  <div class="modal-bg" id="pkg-modal-bg">
+    <div class="modal" style="max-width:460px">
+      <h3 id="pkg-modal-title">Package order</h3>
+      <div id="pkg-modal-meta" style="font-size:12px;color:var(--text2);background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px;margin-bottom:12px"></div>
+
+      <label>Starting weight (g)</label>
+      <input id="pkg-start" type="number" inputmode="decimal" step="0.1" placeholder="weigh the package before packaging" oninput="pkgCheckStart()"/>
+      <div id="pkg-start-flag" style="font-size:12px;margin:-4px 0 10px;display:none"></div>
+
+      <label># actually packaged <span style="color:var(--text3);font-weight:400">(type the real count — may differ from the order)</span></label>
+      <input id="pkg-qty" type="number" inputmode="numeric" step="1" placeholder="e.g. 300" oninput="pkgCheckFinal()"/>
+      <div id="pkg-packaged-line" style="font-size:12px;color:var(--text3);margin:-4px 0 10px"></div>
+
+      <label>Ending weight (g)</label>
+      <input id="pkg-end" type="number" inputmode="decimal" step="0.1" placeholder="weigh whatever is left after packaging" oninput="pkgCheckFinal()"/>
+      <div id="pkg-final-line" style="font-size:12px;margin:-4px 0 10px;color:var(--text2)"></div>
+
+      <label>1st count by</label>
+      <input id="pkg-count" type="text" placeholder="who counted"/>
+      <label>Count verified by</label>
+      <input id="pkg-verify" type="text" placeholder="second person"/>
+      <label>Package # &amp; label verified by</label>
+      <input id="pkg-label" type="text" placeholder="who verified the tag/label"/>
+
+      <div id="pkg-override-box" style="display:none;background:var(--red-bg);border:1px solid var(--red-dim);border-radius:var(--r);padding:10px;margin:10px 0">
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--red);cursor:pointer">
+          <input id="pkg-override" type="checkbox" style="width:auto;margin-top:2px" onchange="pkgUpdateSubmitState()"/>
+          <span id="pkg-override-text">Starting weight is off by more than 30g. Re-check the jar and scale. Tick to confirm the weight you entered is correct — this package will be highlighted on the Weekly Menu for lead review.</span>
+        </label>
+      </div>
+
+      <div class="modal-btns">
+        <button class="btn-cancel" onclick="closePkgModal()">Cancel</button>
+        <button class="btn-primary" id="pkg-submit-btn" onclick="confirmPackaging()">Submit</button>
+      </div>
+    </div>
   </div>
 
 <!-- LOGIN MODAL — visibility:visible !important overrides pre-login cascade -->
@@ -1992,6 +2053,9 @@ const IPM_SUPPORT_ROOMS = [
   {id:'dry1',   name:'Dry room 1'},
   {id:'dry2',   name:'Dry room 2'},
 ];
+// Destination location written to the METRC clone export (clones land here as
+// immature plants regardless of which room the mother lives in).
+const CLONE_DEST_LOCATION = 'Veg Room Immature';
 function getIpmRoom(id){
   return rooms.find(r=>r.id===id) || IPM_SUPPORT_ROOMS.find(r=>r.id===id) || null;
 }
@@ -2046,13 +2110,13 @@ function resolveRuleRooms(scopeRooms){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
+  lead:       {pages:['assignments','order','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
   defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
   fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','rules','additive','checks','slack','metrc','supplies'], roomView:'basic'},
   cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
   ipm:        {pages:['assignments','rooms','today-log','calendar','checks','rules','additive','ipm'], roomView:'basic'},
   checker:    {pages:['assignments','today-log','calendar','checks'], roomView:'none'},
-  postprod:   {pages:['assignments','postprod','today-log','calendar','metrc'], roomView:'none'},
+  postprod:   {pages:['assignments','order','postprod','today-log','calendar','metrc'], roomView:'none'},
 };
 // Which METRC subtabs each role can see
 const METRC_ROLE_TABS = {
@@ -4316,16 +4380,35 @@ async function logCloneCut(clearStrain=false,leadOverride=false){
   pushConfigToCloud(true); // immediate — clone saves must sync right away
   renderCloneTracker();
 
+  // ── Build the sheet row to match the METRC clone export format ──
+  // Export columns: Plant Number | Batch Name | Plants Type | Plants Count |
+  //                 Location Name | Strain Name | Actual Date
+  // Batch Name = "MMDDYY ACR LAST4" (e.g. "052526 KM3 0510").
+  // We keep the ISO timestamp but put it at the END so it can be copied around.
+  const acr = strainCodeOnly(strain) || strain.replace(/[^a-z0-9]/gi,'').slice(0,4).toUpperCase();
+  const last4 = (motherLabel||'').replace(/\s+/g,'').slice(-4) || motherTag;
+  const mmddyy = (()=>{ const d=TODAY; const p=n=>String(n).padStart(2,'0');
+    return p(d.getMonth()+1)+p(d.getDate())+String(d.getFullYear()).slice(-2); })();
+  const batchName = `${mmddyy} ${acr} ${last4}`;
+  const actualDate = `${TODAY.getMonth()+1}/${TODAY.getDate()}/${TODAY.getFullYear()}`; // M/D/YYYY
+  const fullTag = motherLabel || ('OVERRIDE_'+motherTag);
+  // Column order: the Apps Script prepends an ISO timestamp as column 1, then
+  // we put `who` as column 2 (metadata), then the clean METRC export block in
+  // columns 3-9 for copy-paste. Final sheet row:
+  // [ISO timestamp] | Who | Plant Number | Batch Name | Plants Type |
+  // Plants Count | Location Name | Strain Name | Actual Date.
+  const sheetRow = [who, fullTag, batchName, 'Clone', count, CLONE_DEST_LOCATION, strain, actualDate];
+
   // ── Sheet write WITH success confirmation ──
   setHint('Saving to sheet…','var(--text3)');
-  const result=await postToSheet('Clone_Log',[dateToIso(TODAY),fmtTime(),who,strain,count,motherTag,motherLabel]);
+  const result=await postToSheet('Clone_Log', sheetRow);
   if(!result.ok){
     setHint('⚠ Sheet write failed — saved locally only. Click here to retry.','var(--amber)');
     if(hint){
       hint.style.cursor='pointer';
       hint.onclick=async ()=>{
         setHint('Retrying…','var(--text3)');
-        const r2=await postToSheet('Clone_Log',[session.date,session.time,session.who,session.strain,session.count,session.motherTag,session.motherLabel]);
+        const r2=await postToSheet('Clone_Log', sheetRow);
         if(r2.ok){ setHint('✓ Saved on retry','var(--green)'); hint.onclick=null; hint.style.cursor=''; setTimeout(()=>setHint(''),3000); }
         else { setHint('⚠ Still failed — check Settings → Apps Script URL. Tap to retry.','var(--red)'); }
       };
@@ -4354,7 +4437,23 @@ async function logCloneCut(clearStrain=false,leadOverride=false){
 
 function resetCloneWeek(){
   if(!confirm('Reset this week\'s clone log?'))return;
-  cloneSessions=[];S(getWeekKey(),cloneSessions);renderCloneTracker();
+  const wk=getWeekKey();
+  // Clear local sessions for the week.
+  cloneSessions=[];S(wk,cloneSessions);
+  // Record a reset marker so the cloud (and other devices) honor the wipe.
+  // The 60s background pull would otherwise re-merge the old cloud sessions
+  // right back in. The marker stores the reset's ISO date plus a 24h clock
+  // time {date:'YYYY-MM-DD', time:'HH:MM'} in Central time. The pull drops any
+  // cloud session for this week logged at or before this instant, while a fresh
+  // cut logged afterward survives. Sessions carry a 12h "time" like "4:07 PM";
+  // the pull converts both to comparable minutes-of-day for the same-day case.
+  const nowCT=new Date().toLocaleString('en-US',{timeZone:'America/Chicago',hour12:false,
+    hour:'2-digit',minute:'2-digit'}).trim().replace(/^24:/,'00:');
+  const resetMark={date:dateToIso(TODAY), time:nowCT};
+  S('wg_cloneweek_reset_'+wk, resetMark);
+  // Push the emptied week + marker to the cloud now, so the reset sticks.
+  if(typeof pushConfigToCloud==='function'){ try{ pushConfigToCloud(true); }catch(e){} }
+  renderCloneTracker();
 }
 
 function renderCloneTracker(){
@@ -6532,82 +6631,170 @@ function renderPrerollPriority(){
   trimWeights=L('wg_trim_weights',{});
   const isLead=currentRole==='lead';
 
-  // One row per harvest — multiple lots of the same strain are NOT merged so the
-  // team can see if one batch tested higher than another and prioritize accordingly.
-  const strains=trimQueue
-    .map(item=>({...item,w:trimWeights[item.id]||{}}))
-    .filter(item=>{
-      const sm=parseFloat(item.w.smallBuds)||0;
-      const thc=parseFloat(item.w.purplTHC)||0;
-      return sm>0 || thc>0;
-    })
-    .map(item=>({
-      strain:item.strain,
-      thc:parseFloat(item.w.purplTHC)||0,
-      smalls:parseFloat(item.w.smallBuds)||0,
-      roomName:rooms.find(r=>r.id===item.roomId)?.name||item.roomName||'',
-      harvestDate:item.harvestDate||'',
-      archived:!!item.archived,
-      ids:[item.id]
-    }))
-    // Sort: strains with THC first (descending), strains without THC at the bottom
-    .sort((a,b)=>{
-      if(a.thc>0 && b.thc===0) return -1;
-      if(a.thc===0 && b.thc>0) return 1;
-      return b.thc - a.thc;
-    });
-  if(!strains.length){
-    list.innerHTML=`<div class="empty-state">No harvests with smalls or THC entered yet. Add weights in the Trim queue.</div>`;
+  const packages=metrcData.packages||[];
+  if(!packages.length){
+    list.innerHTML=`<div class="empty-state">No packages loaded. Upload the METRC <strong>NotSubmitted Packages</strong> export above (in METRC Data → data upload) to build the pre-roll priority list.</div>`;
     return;
   }
 
-  // Strains with no THC drop the rank medal (no meaningful ranking yet)
-  const rankedStrains=strains.filter(s=>s.thc>0);
-  list.innerHTML=strains.map((item,i)=>{
-    const ranked=item.thc>0;
-    const rank=ranked?(rankedStrains.indexOf(item)+1):null;
+  // Build a THC lookup from the trim queue, keyed by source-harvest name.
+  // The package file's "Source Harvest(s)" column uses the same batch-name
+  // format as the trim queue's harvestBatch (e.g. "042726 Biggie Runtz R11"),
+  // so we can pull the Purple Pro THC the team already entered for that harvest.
+  // Keyed both by full harvest name and by a normalized form for resilience.
+  const norm=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const thcByHarvest={};
+  trimQueue.forEach(item=>{
+    const w=trimWeights[item.id]||{};
+    const thc=parseFloat(w.purplTHC)||0;
+    if(thc<=0) return;
+    [item.harvestBatch, item.strain].forEach(key=>{
+      if(key) thcByHarvest[norm(key)]=thc;
+    });
+  });
+  // Overlay any harvest-keyed THC entered directly on a package card whose
+  // harvest has no trim-queue item (synced via wg_preroll_thc).
+  const thcOverride=L('wg_preroll_thc',{})||{};
+  Object.keys(thcOverride).forEach(h=>{
+    const t=parseFloat(thcOverride[h])||0;
+    if(t>0) thcByHarvest[norm(h)]=t;
+  });
+
+  // Column accessors — METRC package exports vary slightly in header names.
+  const getField=(r,names)=>{ for(const n of names){ if(r[n]!==undefined && r[n]!=='') return r[n]; } return ''; };
+  const last4=t=>{ const s=String(t||'').replace(/\s+/g,''); return s?s.slice(-4):''; };
+
+  // Parse every package row.
+  const pkgs=packages.map((r,idx)=>{
+    const harvest=getField(r,['Source Harvest(s)','Source Harvest','Source Harvests']);
+    const strain =getField(r,['Item Strain','Strain','StrainName','Strain Name'])||harvest||'Unknown';
+    const qty    =parseFloat(getField(r,['Quantity','Qty']))||0;
+    const cat    =getField(r,['Category','Item Category']);
+    const tag    =getField(r,['Tag','Label','Package Tag']);
+    return { idx, harvest, strain, qty, cat, tag, isShake:/shake|trim/i.test(cat) };
+  });
+
+  // Group by source harvest — one card per harvest. Packages sharing a harvest
+  // are listed separately inside the card (NOT totaled) so each lot stays
+  // visible with its own quantity and last-4 tag.
+  const groups={};
+  pkgs.forEach(p=>{
+    const key=norm(p.harvest)||('__pkg'+p.idx); // ungrouped if harvest blank
+    if(!groups[key]){
+      const bdate=parseBatchDate(p.harvest);
+      groups[key]={
+        harvest:p.harvest, strain:p.strain, key,
+        thc: thcByHarvest[norm(p.harvest)] || thcByHarvest[norm(p.strain)] || 0,
+        harvestDate: bdate?dateToIso(bdate):'',
+        pkgs:[]
+      };
+    }
+    groups[key].pkgs.push(p);
+  });
+  const cards=Object.values(groups);
+
+  // Sort: THC descending (harvests with a matched THC first), then by total
+  // quantity of the group (sort key only — quantities are still shown per-package).
+  const groupQty=g=>g.pkgs.reduce((s,p)=>s+p.qty,0);
+  cards.sort((a,b)=>{
+    if((a.thc>0)!==(b.thc>0)) return a.thc>0?-1:1;
+    if(b.thc!==a.thc) return b.thc-a.thc;
+    return groupQty(b)-groupQty(a);
+  });
+
+  const ranked=cards.filter(g=>g.thc>0);
+  const totalQty=pkgs.reduce((s,p)=>s+p.qty,0);
+  const matched=ranked.length, unmatched=cards.length-matched;
+  const summary='<div style="display:flex;gap:18px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);margin-bottom:10px;flex-wrap:wrap">'
+    +'<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text)">'+cards.length+'</div><div style="font-size:10px;color:var(--text3)">harvests · '+pkgs.length+' pkgs</div></div>'
+    +'<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--blue)">'+Math.round(totalQty).toLocaleString()+'g</div><div style="font-size:10px;color:var(--text3)">total quantity</div></div>'
+    +'<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--purple)">'+matched+'</div><div style="font-size:10px;color:var(--text3)">THC matched</div></div>'
+    +(unmatched?'<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text3)">'+unmatched+'</div><div style="font-size:10px;color:var(--text3)">no THC match</div></div>':'')
+    +'</div>';
+
+  list.innerHTML=summary+cards.map(g=>{
+    const isRanked=g.thc>0;
+    const rank=isRanked?(ranked.indexOf(g)+1):null;
     const rankColor=rank===1?'var(--amber)':rank===2?'var(--text3)':rank===3?'#cd7f32':'var(--text3)';
     const rankLabel=rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':(rank?`#${rank}`:'');
-    const borderColor=ranked?rankColor:'var(--border2)';
-    const idsJson=JSON.stringify(item.ids);
-    return`<div class="card" style="border-left:3px solid ${borderColor};${ranked?'':'opacity:0.85'}">
+    const borderColor=isRanked?rankColor:'var(--border2)';
+    const safeHarvest=(g.harvest||'').replace(/"/g,'&quot;');
+    // Per-package rows inside the card: each lot shown separately with its own
+    // quantity + last-4 tag. Multiple categories within a harvest get badged per row.
+    const pkgRows=g.pkgs.map(p=>{
+      const t4=last4(p.tag);
+      const catBadge=p.cat?`<span style="font-size:9px;padding:1px 6px;border-radius:var(--r);background:${p.isShake?'var(--amber-bg,rgba(245,158,11,0.13))':'var(--green-bg)'};color:${p.isShake?'var(--amber)':'var(--green)'};border:1px solid ${p.isShake?'var(--amber)':'var(--green-dim)'};font-weight:600">${p.cat}</span>`:'';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border)">
+        <span style="font-family:var(--mono);font-size:12px;color:var(--text2);min-width:46px">…${t4||'????'}</span>
+        ${catBadge}
+        <span style="margin-left:auto;font-family:var(--mono);font-size:13px;font-weight:600;color:var(--blue)">${p.qty>0?Math.round(p.qty).toLocaleString()+'g':'—'}</span>
+      </div>`;
+    }).join('');
+    return`<div class="card" style="border-left:3px solid ${borderColor};${isRanked?'':'opacity:0.9'}">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="font-size:22px;min-width:32px;text-align:center;color:${ranked?'var(--text)':'var(--text3)'}">${rankLabel||'·'}</div>
-        <div style="flex:1;min-width:120px">
-          <div style="font-size:14px;font-weight:700;color:var(--text)">${strainWithCode(item.strain)}</div>
-          <div style="font-size:11px;color:var(--text3)">${item.roomName}${item.harvestDate?' · '+(new Date(item.harvestDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||item.harvestDate):''}${item.archived?' · <span style="color:var(--green)">archived</span>':''}${!ranked?' · No THC reading yet':''}</div>
+        <div style="font-size:22px;min-width:32px;text-align:center;color:${isRanked?'var(--text)':'var(--text3)'}">${rankLabel||'·'}</div>
+        <div style="flex:1;min-width:140px">
+          <div style="font-size:14px;font-weight:700;color:var(--text)">${strainWithCode(g.strain)}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${g.harvest||'—'} · ${g.pkgs.length} pkg${g.pkgs.length!==1?'s':''}${!isRanked?' · <span style="color:var(--amber)">no THC for this harvest yet</span>':''}</div>
         </div>
-        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-          <div style="text-align:center;min-width:80px">
-            ${ranked?`<div style="font-size:22px;font-weight:700;color:var(--purple);font-family:var(--mono)">${item.thc.toFixed(1)}%</div>`:`<input type="number" min="0" max="40" step="0.1" placeholder="—" value="" data-strain="${item.strain.replace(/"/g,'&quot;')}" data-ids='${idsJson.replace(/\'/g,"&#39;")}'
-              style="width:70px;font-size:14px;font-weight:700;color:var(--purple);font-family:var(--mono);text-align:center;padding:4px 6px;border-radius:var(--r);border:1px solid var(--purple-dim,rgba(168,85,247,0.4));background:var(--bg2)"
-              onblur="savePrerollTHC(this)"
-              onkeydown="if(event.key==='Enter')this.blur();"/>`}
-            <div style="font-size:10px;color:var(--text3);margin-top:2px">THC${ranked?'':' (tap to enter)'}</div>
-          </div>
-          <div style="text-align:center">
-            <div style="font-size:18px;font-weight:600;color:var(--blue);font-family:var(--mono)">${item.smalls>0?item.smalls.toFixed(1)+'g':'—'}</div>
-            <div style="font-size:10px;color:var(--text3)">Smalls</div>
-          </div>
+        <div style="text-align:center;min-width:78px">
+          ${isRanked
+            ?`<div style="font-size:22px;font-weight:700;color:var(--purple);font-family:var(--mono)">${g.thc.toFixed(1)}%</div>`
+            :`<input type="number" min="0" max="40" step="0.1" placeholder="—" value="" data-harvest="${safeHarvest}"
+                style="width:70px;font-size:14px;font-weight:700;color:var(--purple);font-family:var(--mono);text-align:center;padding:4px 6px;border-radius:var(--r);border:1px solid var(--purple-dim,rgba(168,85,247,0.4));background:var(--bg2)"
+                onblur="savePrerollTHC(this)" onkeydown="if(event.key==='Enter')this.blur();"/>`}
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">THC${isRanked?'':' (tap to enter)'}</div>
         </div>
-        ${isLead?`<div style="display:flex;gap:6px;margin-left:auto;flex-shrink:0">
-          <button onclick="editPrerollEntry('${item.ids[0]}')" style="font-size:11px;padding:4px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">Edit</button>
-          <button onclick="removePrerollEntry(${idsJson})" style="font-size:11px;padding:4px 9px;border-radius:var(--r);border:1px solid var(--red-bg);background:none;color:var(--red);cursor:pointer">Remove</button>
-        </div>`:''}
       </div>
+      <div style="margin-top:8px;margin-left:44px">${pkgRows}</div>
     </div>`;
   }).join('');
 }
 
-// ── Save THC entered inline on a preroll card. Applies to all matching lot ids
-// (since preroll dedupes by strain, multiple harvests of the same strain may share a card).
+// ── Save THC entered inline on a preroll card.
+// Two entry paths:
+//  • data-ids  → legacy trim-queue-id keyed (kept for compatibility)
+//  • data-harvest → package card keyed by Source Harvest. We write the THC
+//    back onto any trim-queue item with that harvest (so it persists and syncs
+//    through the normal trim-weights path); if none exists yet, we stash it in
+//    a harvest-keyed override map that the preroll match also reads.
 function savePrerollTHC(inputEl){
   const v=parseFloat(inputEl.value);
   if(isNaN(v)||v<=0||v>40){inputEl.value='';return;}
-  let ids=[];
-  try{ ids=JSON.parse(inputEl.getAttribute('data-ids').replace(/&#39;/g,"'")); }catch(e){ ids=[]; }
-  if(!ids.length) return;
   trimWeights=L('wg_trim_weights',{});
+
+  const harvestAttr=inputEl.getAttribute('data-harvest');
+  if(harvestAttr){
+    const norm=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+    const target=norm(harvestAttr);
+    let wrote=false;
+    trimQueue.forEach(item=>{
+      if(norm(item.harvestBatch)===target || norm(item.strain)===target){
+        if(!trimWeights[item.id]) trimWeights[item.id]={};
+        trimWeights[item.id].purplTHC=v;
+        if(loggedInMember) trimWeights[item.id].purplEnteredBy=loggedInMember.name;
+        wrote=true;
+      }
+    });
+    if(wrote){
+      S('wg_trim_weights',trimWeights);
+      pushWeightsToCloud();
+    } else {
+      // No trim-queue item for this harvest — keep THC in a harvest override map.
+      const ov=L('wg_preroll_thc',{})||{};
+      ov[harvestAttr]=v;
+      S('wg_preroll_thc',ov);
+      sessionStorage.setItem('wg_preroll_thc_dirty','1');
+      pushConfigToCloud(true);
+    }
+    renderPrerollPriority();
+    return;
+  }
+
+  // Legacy id-keyed path
+  let ids=[];
+  try{ ids=JSON.parse((inputEl.getAttribute('data-ids')||'[]').replace(/&#39;/g,"'")); }catch(e){ ids=[]; }
+  if(!ids.length) return;
   ids.forEach(id=>{
     if(!trimWeights[id]) trimWeights[id]={};
     trimWeights[id].purplTHC=v;
@@ -6750,6 +6937,7 @@ function showPage(page){
     pullConfigFromCloud(true).then(()=>renderCloneTracker()).catch(()=>{});
   }
   if(page==='metrc'){updateMetrcSyncLabel();buildMetrcTabNav();pullMetrcFromCloud(true);}
+  if(page==='order'){ renderOrders(); }
   if(page==='postprod'){
     // Show pre-roll sub-tab for leads only
     const prerollBtn=document.getElementById('preroll-subtab-btn');
@@ -6876,12 +7064,16 @@ async function testGsUrl(){
 async function postToSheet(sheetName,rowData){
   if(!gsUrl) return {ok:false,error:'no gsUrl configured'};
   try{
+    // Prepended timestamp: use America/Chicago local time (matches fmtTime used
+    // in the rows) instead of a UTC 'Z' ISO string, whose hour reads as wrong.
+    const ts = new Date().toLocaleString('en-US',{timeZone:'America/Chicago',
+      year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit',second:'2-digit'});
     // text/plain content-type avoids CORS preflight on Apps Script web apps
     // and still allows us to read the response (no-cors mode would hide it).
     const res=await fetch(gsUrl,{
       method:'POST',
       headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({sheet:sheetName,timestamp:new Date().toISOString(),row:rowData})
+      body:JSON.stringify({sheet:sheetName,timestamp:ts,row:rowData})
     });
     if(!res.ok){
       console.warn('[postToSheet] HTTP error',sheetName,res.status);
@@ -6905,6 +7097,7 @@ async function pushMetrcToCloud(){
     vegetative:metrcData.vegetative||[],
     flowering:metrcData.flowering||[],
     harvests:metrcData.harvests||[],
+    packages:metrcData.packages||[],
     harvestPriority:metrcHarvestPriority||{},
     trimQueue:L('wg_trim_queue',[]),
     syncedBy:loggedInMember?loggedInMember.name:'Lead',
@@ -6955,6 +7148,7 @@ async function pullMetrcFromCloud(silent=false){
     if(d.vegetative&&shouldUse(d.vegetative,metrcData.vegetative)){ metrcData.vegetative=d.vegetative;S(METRC_KEYS.vegetative,d.vegetative); }
     if(d.flowering &&shouldUse(d.flowering, metrcData.flowering)) { metrcData.flowering=d.flowering; S(METRC_KEYS.flowering,d.flowering); }
     if(d.harvests  &&shouldUse(d.harvests,  metrcData.harvests))  { metrcData.harvests=d.harvests;   S(METRC_KEYS.harvests,d.harvests); }
+    if(d.packages  &&shouldUse(d.packages,  metrcData.packages))  { metrcData.packages=d.packages;   S(METRC_KEYS.packages,d.packages); }
     if(d.harvestPriority){ metrcHarvestPriority=d.harvestPriority;S(METRC_KEYS.harvestPriority,d.harvestPriority); }
     if(d.trimQueue&&d.trimQueue.length){
       // Merge by id — cloud wins for matching items, local-only items preserved.
@@ -7871,13 +8065,13 @@ function detectMorningRescue(a){
 // ══════════════════════════════════════════════
 const METRC_KEYS={
   mother:'metrc_mother',immature:'metrc_immature',vegetative:'metrc_vegetative',
-  flowering:'metrc_flowering',harvests:'metrc_harvests',
+  flowering:'metrc_flowering',harvests:'metrc_harvests',packages:'metrc_packages',
   sync:'metrc_sync',harvestPriority:'metrc_harvest_priority'
 };
 let metrcData={
   mother:L(METRC_KEYS.mother,[]),immature:L(METRC_KEYS.immature,[]),
   vegetative:L(METRC_KEYS.vegetative,[]),flowering:L(METRC_KEYS.flowering,[]),
-  harvests:L(METRC_KEYS.harvests,[]),
+  harvests:L(METRC_KEYS.harvests,[]),packages:L(METRC_KEYS.packages,[]),
 };
 let metrcHarvestPriority=L(METRC_KEYS.harvestPriority,{});
 
@@ -8088,6 +8282,7 @@ async function handleBulkMetrcUpload(input) {
     if (n.includes('vegetative') || n.includes('veg')) return 'vegetative';
     if (n.includes('flower')) return 'flowering';
     if (n.includes('harvest')) return 'harvests';
+    if (n.includes('package')) return 'packages';
     return null;
   }
 
@@ -8198,18 +8393,32 @@ function buildMetrcTabNav(){
     {key:'strains', label:'Strains'},
     {key:'harvests',   label:'Harvests / Trim queue'},
   ];
+  // Restore the previously-active subtab if it's still allowed; otherwise
+  // fall back to the first allowed tab. This stops a background config pull
+  // (which re-runs buildMetrcTabNav) from snapping the user back to Mothers
+  // while they're working on Strains.
+  const firstAllowed = tabDefs.find(t => allowedTabs.includes(t.key));
+  const targetKey = (_activeMetrcTab && allowedTabs.includes(_activeMetrcTab))
+    ? _activeMetrcTab
+    : (firstAllowed ? firstAllowed.key : null);
   nav.innerHTML = tabDefs
     .filter(t => allowedTabs.includes(t.key))
-    .map((t,i) => `<button class="nav-tab${i===0?' active':''}" onclick="showMetrcTab('${t.key}',this)" style="font-size:12px">${t.label}</button>`)
+    .map((t) => `<button class="nav-tab${t.key===targetKey?' active':''}" onclick="showMetrcTab('${t.key}',this)" style="font-size:12px">${t.label}</button>`)
     .join('');
-  // Show first allowed tab
-  const first = tabDefs.find(t => allowedTabs.includes(t.key));
-  if(first) showMetrcTab(first.key, nav.querySelector('.nav-tab'));
+  // Render the restored (or default) tab
+  if(targetKey){
+    const btn = Array.from(nav.querySelectorAll('.nav-tab')).find(b => b.classList.contains('active'));
+    showMetrcTab(targetKey, btn || nav.querySelector('.nav-tab'));
+  }
 }
 
+// Remembers which METRC subtab is active so background config pulls (which
+// rebuild the nav) don't snap the user back to the default Mothers tab.
+let _activeMetrcTab = 'mothers';
 function showMetrcTab(tab,el){
   const allowedTabs = METRC_ROLE_TABS[currentRole] || METRC_ROLE_TABS.lead;
   if(!allowedTabs.includes(tab)) return;
+  _activeMetrcTab = tab;
   document.querySelectorAll('#metrc-tab-nav .nav-tab').forEach(b=>b.classList.remove('active'));
   if(el) el.classList.add('active');
   ['mothers','clones','strains','harvests'].forEach(t=>{
@@ -8335,7 +8544,25 @@ function renderMetrcStrains(){
   const totalVeg=vegRows.length;
   const totalFlower=flowerRows.length;
   const _sq=(document.getElementById('metrc-strain-search')?.value||'').toLowerCase().trim();
-  const strains=Object.keys(byStrain).filter(s=>!_sq||s.toLowerCase().includes(_sq)||(strainCodeOnly(s)||'').toLowerCase().includes(_sq)).sort((a,b)=>a.localeCompare(b));
+  const strains=Object.keys(byStrain).filter(s=>!_sq||s.toLowerCase().includes(_sq)||(strainCodeOnly(s)||'').toLowerCase().includes(_sq));
+  // Sort mode: 'az' (alphabetical) or 'priority' (lowest stock first).
+  // Priority tiers by your rule: fewest mothers first, ties broken by clones,
+  // then veg, then flower — so the genetics most at risk of being lost (no
+  // healthy moms/clones to pull from) float to the top. 'Unknown' always sinks.
+  if(_strainSortMode==='priority'){
+    strains.sort((a,b)=>{
+      if(a==='Unknown') return 1;
+      if(b==='Unknown') return -1;
+      const da=byStrain[a], db=byStrain[b];
+      if(da.mother!==db.mother) return da.mother-db.mother;
+      if(da.clone!==db.clone)   return da.clone-db.clone;
+      if(da.veg!==db.veg)       return da.veg-db.veg;
+      if(da.flower!==db.flower) return da.flower-db.flower;
+      return a.localeCompare(b);
+    });
+  } else {
+    strains.sort((a,b)=>a.localeCompare(b));
+  }
   const summary='<div style="grid-column:1/-1;display:flex;gap:18px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);margin-bottom:8px;flex-wrap:wrap">'
     +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--purple)">'+totalMother+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Mothers</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].mother>0).length+' strains</div></div></div>'
     +'<div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#06b6d4">'+totalClone+'</div><div><div style="font-size:12px;font-weight:600;color:var(--text)">Clones</div><div style="font-size:10px;color:var(--text3)">'+strains.filter(s=>byStrain[s].clone>0).length+' strains</div></div></div>'
@@ -8361,7 +8588,23 @@ function renderMetrcStrains(){
     const flowerLocs=Object.entries(d.flowerLocs).sort((a,b)=>b[1]-a[1])
       .map(function(e){return'<span style="font-size:10px;padding:2px 6px;background:var(--green-bg);border:1px solid var(--green-dim);border-radius:var(--r);font-family:var(--mono);color:var(--green)">'+e[0].replace('Grow Room ','R').replace('Flower Room ','R')+' \u00b7 '+e[1]+'</span>';}).join('');
     let html='<div class="card" style="border-left:3px solid '+accent+'">';
-    html+='<div style="font-size:14px;font-weight:700;color:'+(isUnk?'var(--text3)':'var(--text)')+';font-style:'+(isUnk?'italic':'normal')+';margin-bottom:6px">'+strainWithCode(strain)+'</div>';
+    const perliteOn = !!_strainPerlite[strain];
+    const safeStrain = strain.replace(/'/g,"\\'");
+    // Header row: strain name + perlite toggle. Perlite = this strain's new-gen
+    // mothers have been moved into the perlite mix (vs rockwool).
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">';
+    html+='<div style="font-size:14px;font-weight:700;color:'+(isUnk?'var(--text3)':'var(--text)')+';font-style:'+(isUnk?'italic':'normal')+'">'+strainWithCode(strain)+'</div>';
+    if(!isUnk){
+      html+='<label title="Mothers in perlite mix" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;white-space:nowrap;padding:3px 7px;border-radius:var(--r);border:1px solid '+(perliteOn?'var(--green)':'var(--border2)')+';background:'+(perliteOn?'var(--green-bg)':'var(--bg3)')+';color:'+(perliteOn?'var(--green)':'var(--text3)')+';cursor:pointer">'+
+        '<input type="checkbox" '+(perliteOn?'checked':'')+' onchange="toggleStrainPerlite(\''+safeStrain+'\',this.checked)" style="margin:0"/>'+
+        '🌱 Perlite</label>';
+    }
+    html+='</div>';
+    // Low-stock cue in priority mode: strains with no mothers are the most at
+    // risk of being lost, so flag them explicitly rather than just sorting.
+    if(_strainSortMode==='priority' && !isUnk && d.mother===0){
+      html+='<div style="font-size:10px;font-weight:600;color:var(--red);margin-bottom:6px">⚠ No mothers — '+(d.clone>0?'clones only':(d.veg>0||d.flower>0)?'no moms or clones':'at risk')+'</div>';
+    }
     html+='<div style="display:flex;gap:14px;margin-bottom:8px;flex-wrap:wrap">';
     if(d.flower>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--green)">'+d.flower+'</div><div style="font-size:10px;color:var(--text3)">flowering</div></div>';
     if(d.veg>0) html+='<div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--blue)">'+d.veg+'</div><div style="font-size:10px;color:var(--text3)">veg</div></div>';
@@ -8378,6 +8621,30 @@ function renderMetrcStrains(){
   grid.innerHTML=summary+cards;
 }
 
+// ── Strain sort mode (A→Z vs lowest-stock-first) ──
+let _strainSortMode = 'az';
+function setStrainSort(mode){
+  _strainSortMode = mode;
+  const azBtn = document.getElementById('metrc-strain-sort-az');
+  const prBtn = document.getElementById('metrc-strain-sort-priority');
+  if(azBtn) azBtn.style.background = (mode==='az') ? 'var(--blue-bg)' : 'var(--bg3)';
+  if(prBtn) prBtn.style.background = (mode==='priority') ? 'var(--blue-bg)' : 'var(--bg3)';
+  renderMetrcStrains();
+}
+
+// ── Perlite flag per strain ──
+// Marks that a strain's new-generation mothers have been transitioned into
+// the perlite mix (vs rockwool). Synced across devices via cloud config so
+// everyone sees the same flags. Keyed by strain name.
+let _strainPerlite = L('wg_strain_perlite', {}) || {};
+function toggleStrainPerlite(strain, on){
+  if(on) _strainPerlite[strain] = true;
+  else delete _strainPerlite[strain];
+  S('wg_strain_perlite', _strainPerlite);
+  sessionStorage.setItem('wg_strain_perlite_dirty','1');
+  pushConfigToCloud(true);
+  renderMetrcStrains();
+}
 
 function renderMetrcHarvests(){
   const list=document.getElementById('metrc-harvests-list');
@@ -8533,10 +8800,13 @@ function showStrainAutocomplete(val){
   const suggestions=getMetrcStrainSuggestions(val);
   if(!suggestions.length||!val||val.length<2){box.style.display='none';return;}
   box.style.display='block';
-  box.innerHTML=suggestions.slice(0,12).map(s=>`<div onclick="selectStrain('${s.strain.replace(/'/g,"\'")}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
-    <div style="font-weight:600;color:var(--text)">${s.strain}</div>
+  box.innerHTML=suggestions.slice(0,12).map(s=>{
+    const acr=strainCodeOnly(s.strain);
+    const acrTag=acr?` <span style="font-family:var(--mono);font-weight:700;color:var(--blue)">${acr}</span>`:'';
+    return `<div onclick="selectStrain('${s.strain.replace(/'/g,"\'")}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+    <div style="font-weight:600;color:var(--text)">${s.strain}${acrTag}</div>
     <div style="font-size:11px;color:var(--text3)">${s.mothers} mothers · ${s.locStr}</div>
-  </div>`).join('');
+  </div>`;}).join('');
 }
 function selectStrain(strain){
   const input=document.getElementById('ce-strain');
@@ -8563,7 +8833,9 @@ function showCloneStrainInfo(strain){
   const locCounts={};
   mothers.forEach(m=>{const l=m['Location']||'Unknown';locCounts[l]=(locCounts[l]||0)+1;});
   const locStr=Object.entries(locCounts).map(([l,n])=>`<strong>${n}</strong> in ${l.replace('Mothers Room','Mothers Rm').replace('Veg Room Veg','Veg Rm')}`).join(' · ');
-  text.innerHTML=`<strong style="color:var(--green)">${strain}</strong> — <strong>${mothers.length}</strong> mother${mothers.length!==1?'s':''} · ${locStr}`;
+  const acr=strainCodeOnly(strain);
+  const acrTag=acr?` <span style="font-family:var(--mono);font-weight:700;color:var(--blue);background:var(--blue-bg);padding:1px 7px;border-radius:var(--r);margin-left:4px">${acr}</span>`:'';
+  text.innerHTML=`<strong style="color:var(--green)">${strain}</strong>${acrTag} — <strong>${mothers.length}</strong> mother${mothers.length!==1?'s':''} · ${locStr}`;
   panel.style.background='var(--green-bg)';panel.style.borderColor='var(--green-dim)';
   panel.style.display='block';
 }
@@ -10764,6 +11036,7 @@ async function pushConfigToCloud(silent=false){
   }
   // Gather clone sessions for last 4 weeks
   const cloneSessions={};
+  const cloneResets={};
   for(let i=0;i<4;i++){
     const d=new Date(TODAY); d.setDate(d.getDate()-(i*7));
     const day=d.getDay(); const diff=d.getDate()-day+(day===0?-6:1);
@@ -10772,6 +11045,12 @@ async function pushConfigToCloud(silent=false){
     const key='cloneweek_'+wk;
     const sessions=L(key,null);
     if(sessions&&sessions.length) cloneSessions[key]=sessions;
+    // Carry the reset marker (if any) so the wipe propagates to the cloud and
+    // other devices. Without this, an emptied week is simply omitted from the
+    // payload and the cloud keeps the stale sessions, which then flood back on
+    // the next pull.
+    const resetMark=L('wg_cloneweek_reset_'+key,null);
+    if(resetMark) cloneResets[key]=resetMark;
   }
   // Gather roomOverrides (task done/skip per room per day) for last 7 days
   // so task completions sync across devices — without this, when Hy finishes a
@@ -10796,6 +11075,8 @@ async function pushConfigToCloud(silent=false){
   const _ipmLogDirty   = sessionStorage.getItem('wg_ipm_log_dirty')==='1';
   const _flowerScheduleDirty = sessionStorage.getItem('wg_flower_schedule_dirty')==='1';
   const _trimQueueDirty= sessionStorage.getItem('wg_trim_queue_dirty')==='1';
+  const _strainPerliteDirty = sessionStorage.getItem('wg_strain_perlite_dirty')==='1';
+  const _prerollThcDirty = sessionStorage.getItem('wg_preroll_thc_dirty')==='1';
 
   // RACE-CONDITION GUARDS: suppress pushing empty arrays when cloud pull
   // hasn't completed yet. Applies to both legacy ipmRules and unified rules.
@@ -10832,10 +11113,13 @@ async function pushConfigToCloud(silent=false){
       alertLog:L('wg_alert_log',[]),
       todayLogs,
       cloneSessions,
+      cloneResets,
       roomOverridesByDay,
       dryRooms,
       alertThresholds,
       ...(_trimQueueDirty ? {trimQueue:L('wg_trim_queue',[])} : {}),
+      ...(_strainPerliteDirty ? {strainPerlite:L('wg_strain_perlite',{})} : {}),
+      ...(_prerollThcDirty ? {prerollThc:L('wg_preroll_thc',{})} : {}),
       approvedTakedowns:L('wg_approved_takedowns',{}),
       calendarRules:L('wg_cal_rules',[]),
       calendarEvents:L('wg_cal_events',[]),
@@ -10856,6 +11140,8 @@ async function pushConfigToCloud(silent=false){
     if(_ipmLogDirty)   sessionStorage.removeItem('wg_ipm_log_dirty');
     if(_flowerScheduleDirty) sessionStorage.removeItem('wg_flower_schedule_dirty');
     if(_trimQueueDirty)sessionStorage.removeItem('wg_trim_queue_dirty');
+    if(_strainPerliteDirty)sessionStorage.removeItem('wg_strain_perlite_dirty');
+    if(_prerollThcDirty)sessionStorage.removeItem('wg_preroll_thc_dirty');
   }catch(e){ if(!silent) console.warn('[Config] Push failed:',e); }
 }
 
@@ -10944,6 +11230,27 @@ async function pullConfigFromCloud(silent=false){
     // Custom chores & tasks
     if(d.customChores){ S('wg_custom_chores',d.customChores); }
     if(d.customTasks&&d.customTasks.length){ customTasks=d.customTasks; S('wg_custom_tasks',customTasks); }
+
+    // Strain perlite flags — cloud is authoritative unless this device has an
+    // unpushed local edit pending (dirty flag still set). Avoids a stale pull
+    // wiping a checkbox the user just toggled but hasn't synced yet.
+    if(d.strainPerlite && typeof d.strainPerlite==='object'){
+      const localPending = sessionStorage.getItem('wg_strain_perlite_dirty')==='1';
+      if(!localPending){
+        _strainPerlite = d.strainPerlite;
+        S('wg_strain_perlite', _strainPerlite);
+        if(_activeMetrcTab==='strains' && typeof renderMetrcStrains==='function') renderMetrcStrains();
+      }
+    }
+    // Pre-roll THC overrides (harvest-keyed THC for packages with no trim-queue
+    // item) — same pending-edit guard as perlite.
+    if(d.prerollThc && typeof d.prerollThc==='object'){
+      const localPending = sessionStorage.getItem('wg_preroll_thc_dirty')==='1';
+      if(!localPending){
+        S('wg_preroll_thc', d.prerollThc);
+        if(typeof renderPrerollPriority==='function') renderPrerollPriority();
+      }
+    }
 
     // Supplies — merge by id (keep local entries not yet in cloud)
     if(d.supplies&&d.supplies.length){
@@ -11136,12 +11443,45 @@ async function pullConfigFromCloud(silent=false){
       });
     }
 
-    // Clone sessions — merge per week
+    // Clone reset markers — adopt the latest reset per week (local vs cloud),
+    // so a "Reset week" on ANY device wins everywhere. Stored before we merge
+    // sessions below, so the freshly-adopted marker is used in the same pass.
+    if(d.cloneResets){
+      Object.entries(d.cloneResets).forEach(([key,cloudMark])=>{
+        if(!cloudMark||!cloudMark.date) return;
+        const localMark=L('wg_cloneweek_reset_'+key,null);
+        const cloudKeyN=cloudMark.date+' '+(cloudMark.time||'00:00');
+        const localKeyN=localMark&&localMark.date ? localMark.date+' '+(localMark.time||'00:00') : '';
+        if(cloudKeyN>localKeyN) S('wg_cloneweek_reset_'+key,cloudMark);
+      });
+    }
+
+    // Clone sessions — merge per week, honoring any reset marker for that week.
+    // A reset drops every session logged at or before the reset instant; cuts
+    // logged afterward survive. Comparison is date + minutes-of-day so the
+    // same-day "reset this morning, new cut this afternoon" case works.
     if(d.cloneSessions){
+      const toMinKey=(dateStr,timeStr)=>{
+        // dateStr 'YYYY-MM-DD'; timeStr may be 12h "4:07 PM" (session) or
+        // 24h "16:07" (reset marker). Return 'YYYY-MM-DD#MMMM' (mins padded).
+        let mins=0; const t=(timeStr||'').trim();
+        const m12=t.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+        const m24=t.match(/^(\d{1,2}):(\d{2})$/);
+        if(m12){ let h=parseInt(m12[1])%12; if(/[Pp]/.test(m12[3]))h+=12; mins=h*60+parseInt(m12[2]); }
+        else if(m24){ mins=parseInt(m24[1])*60+parseInt(m24[2]); }
+        return (dateStr||'')+'#'+String(mins).padStart(4,'0');
+      };
       Object.entries(d.cloneSessions).forEach(([wk,sessions])=>{
+        const resetMark=L('wg_cloneweek_reset_'+wk,null);
+        let cloudSessions=sessions;
+        if(resetMark&&resetMark.date){
+          const resetKey=toMinKey(resetMark.date,resetMark.time);
+          // Drop cloud sessions logged at or before the reset instant.
+          cloudSessions=sessions.filter(s=>toMinKey(s.date,s.time)>resetKey);
+        }
         const localS=L(wk,[]);
         const localTimes=new Set(localS.map(s=>s.time+'_'+s.strain));
-        const merged=[...localS,...sessions.filter(s=>!localTimes.has(s.time+'_'+s.strain))];
+        const merged=[...localS,...cloudSessions.filter(s=>!localTimes.has(s.time+'_'+s.strain))];
         S(wk,merged);
         if(wk===getWeekKey()) cloneSessions=merged;
       });
@@ -13746,6 +14086,199 @@ pullGrowlinkFromCloud = async function(silent){
   try{ runGuardrails(); }catch(e){ console.warn('[Guardrails] Error:',e); }
   return result;
 };
+
+
+// local HTML-escape (the app inlines .replace(/</g,'&lt;') elsewhere; this is scoped here)
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ════════════════════════════════════════════════════════════════════
+// ORDER / PACKAGING FEATURE — frontend
+// ════════════════════════════════════════════════════════════════════
+let _orderState = { orders: [], current: null };
+
+function gramsPerUnitJS(sizeLabel){
+  const s=String(sizeLabel||'').toLowerCase().trim();
+  if(s==='8th'||s==='eighth'||s.indexOf('3.5')>=0) return 3.5;
+  if(s.indexOf('quarter')>=0||s==='1/4') return 7;
+  if(s.indexOf('half oz')>=0||s.indexOf('half ounce')>=0||s==='1/2 oz') return 14;
+  if(s==='oz'||s.indexOf('ounce')>=0) return 28;
+  if(s.indexOf('gram')>=0||s==='1g') return 1;
+  const m=s.match(/(\d+)\s*pack\s*([\d.]+)\s*g/);
+  if(m) return parseFloat(m[1])*parseFloat(m[2]);
+  return null;
+}
+
+async function renderOrders(){
+  const list=document.getElementById('order-list');
+  const st=document.getElementById('order-status');
+  if(!list) return;
+  if(!gsUrl){ list.innerHTML='<div style="color:var(--text3);font-size:13px;padding:24px;text-align:center">No backend URL configured. A lead can set it in Settings.</div>'; return; }
+  if(st){ st.textContent='Loading…'; }
+  list.innerHTML='<div style="color:var(--text3);font-size:13px;padding:24px;text-align:center">Loading orders…</div>';
+  // Leads can see price; packagers cannot. Backend enforces this via action name.
+  const action = (currentRole==='lead') ? 'getOrdersLead' : 'getOrders';
+  try{
+    const res=await fetch(gsUrl+'?action='+action+'&t='+Date.now());
+    const json=await res.json();
+    if(!json.ok){ list.innerHTML='<div style="color:var(--red);font-size:13px;padding:24px;text-align:center">'+esc(json.error||'Could not load orders')+'</div>'; if(st)st.textContent=''; return; }
+    _orderState.orders=json.orders||[];
+    if(st) st.textContent='Last refreshed: '+fmtTime();
+    if(!_orderState.orders.length){ list.innerHTML='<div style="color:var(--text3);font-size:13px;padding:24px;text-align:center">No orders on the sheet yet.</div>'; return; }
+    list.innerHTML=_orderState.orders.map((o,i)=>orderCardHTML(o,i)).join('');
+  }catch(e){
+    list.innerHTML='<div style="color:var(--red);font-size:13px;padding:24px;text-align:center">Load failed: '+esc(String(e))+'</div>';
+    if(st) st.textContent='';
+  }
+}
+
+function orderCardHTML(o,i){
+  const isLead=currentRole==='lead';
+  const done=(o.status||'').toUpperCase().indexOf('PACKAGED')>=0;
+  const flagged=(o.status||'').toUpperCase()==='FLAGGED';
+  const gpu=o.gramsPerUnit!=null?o.gramsPerUnit:gramsPerUnitJS(o.size);
+  const need=(gpu!=null && o.qtyOrdered)?(Number(o.qtyOrdered)*gpu):null;
+  let statusBadge='';
+  if(flagged) statusBadge='<span class="tag" style="background:var(--red-dim);color:var(--red);font-size:10px">FLAGGED</span>';
+  else if(done) statusBadge='<span class="tag" style="background:var(--green-dim);color:var(--green);font-size:10px">✓ Packaged</span>';
+  else statusBadge='<span class="tag" style="background:var(--bg4);color:var(--text3);font-size:10px">Not packaged</span>';
+
+  const varLine=(o.variance)?('<span style="font-family:var(--mono);font-size:11px;color:'+((String(o.variance).indexOf('-')>=0||Math.abs(parseFloat(o.variance))>30)?'var(--red)':'var(--text2)')+'">Var '+esc(String(o.variance))+'</span>'):'';
+  const ambiguous=o.menuAmbiguous?'<div style="font-size:11px;color:var(--amber);margin-top:4px">⚠ RFID not matched to a single Weekly Menu package — lead must fix the RFID before packaging.</div>':'';
+
+  return '<div class="card" style="border-left:3px solid '+(flagged?'var(--red)':done?'var(--green)':'var(--border)')+'">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+      '<div>'+
+        '<div style="font-size:14px;font-weight:600;color:var(--text)">'+esc(o.strain)+' <span style="font-weight:400;color:var(--text3);font-size:12px">'+esc(o.brand)+'</span></div>'+
+        '<div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px">RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+' · Qty '+esc(String(o.qtyOrdered))+(need!=null?(' · need '+need+'g'):'')+'</div>'+
+        (o.wsNotes?'<div style="font-size:11px;color:var(--text2);margin-top:3px">'+esc(o.wsNotes)+'</div>':'')+
+        (isLead&&o.ppu?'<div style="font-size:11px;color:var(--text3);margin-top:3px">PPU $'+esc(String(o.ppu))+'</div>':'')+
+        ambiguous+
+      '</div>'+
+      '<div style="text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+statusBadge+varLine+'</div>'+
+    '</div>'+
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn-primary" style="font-size:12px;padding:7px 14px" '+(o.menuAmbiguous?'disabled style="opacity:.5"':'')+' onclick="openPkgModal('+i+')">'+(done?'Edit packaging':'Package this')+'</button>'+
+    '</div>'+
+  '</div>';
+}
+
+function openPkgModal(i){
+  const o=_orderState.orders[i];
+  if(!o) return;
+  _orderState.current=i;
+  const gpu=o.gramsPerUnit!=null?o.gramsPerUnit:gramsPerUnitJS(o.size);
+  o._gpu=gpu;
+  document.getElementById('pkg-modal-title').textContent='Package — '+o.strain;
+  document.getElementById('pkg-modal-meta').innerHTML=
+    '<b>'+esc(o.strain)+'</b> '+esc(o.brand)+'<br>RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+'<br>Ordered: <b>'+esc(String(o.qtyOrdered))+'</b>'+
+    (gpu!=null?(' · 1 unit = '+gpu+'g'):' · <span style="color:var(--amber)">unknown unit size</span>');
+  // prefill if re-editing
+  document.getElementById('pkg-start').value=o.startWeight||'';
+  document.getElementById('pkg-end').value=o.endWeight||'';
+  document.getElementById('pkg-count').value=o.countBy||'';
+  document.getElementById('pkg-verify').value=o.verifiedBy||'';
+  document.getElementById('pkg-label').value=o.labelVerifiedBy||'';
+  document.getElementById('pkg-override').checked=false;
+  document.getElementById('pkg-qty').value='';
+  document.getElementById('pkg-packaged-line').textContent='';
+  pkgCheckStart(); pkgCheckFinal(); pkgUpdateSubmitState();
+  document.getElementById('pkg-modal-bg').classList.add('active');
+}
+function closePkgModal(){ document.getElementById('pkg-modal-bg').classList.remove('active'); _orderState.current=null; }
+
+// Start-weight check vs current Weekly Menu grams. Flags >30g.
+function pkgCheckStart(){
+  const o=_orderState.orders[_orderState.current]; if(!o) return;
+  const flagEl=document.getElementById('pkg-start-flag');
+  const box=document.getElementById('pkg-override-box');
+  const start=parseFloat(document.getElementById('pkg-start').value);
+  if(isNaN(start)||o.menuGrams==null){ flagEl.style.display='none'; box.style.display='none'; pkgUpdateSubmitState(); return; }
+  const sv=start-Number(o.menuGrams);
+  const off=Math.abs(sv)>30;
+  flagEl.style.display='block';
+  flagEl.innerHTML='Menu has '+Number(o.menuGrams).toFixed(0)+'g for this package · start variance <b style="font-family:var(--mono)">'+(sv>=0?'+':'')+sv.toFixed(0)+'g</b>'+(off?' <span style="color:var(--red)">— over 30g, verify</span>':' <span style="color:var(--green)">— OK</span>');
+  flagEl.style.color=off?'var(--red)':'var(--text2)';
+  box.style.display=off?'block':'none';
+  pkgUpdateSubmitState();
+}
+
+// Final variance preview = endWeight − (menuGrams − packagedG). Always shown.
+function pkgCheckFinal(){
+  const o=_orderState.orders[_orderState.current]; if(!o) return;
+  const pl=document.getElementById('pkg-packaged-line');
+  const line=document.getElementById('pkg-final-line');
+  const gpu=o._gpu;
+  const qty=parseFloat(document.getElementById('pkg-qty').value);
+  // packaged grams come from the ACTUAL count the packager typed, not the order
+  const packagedG=(gpu!=null&&!isNaN(qty))?qty*gpu:NaN;
+  pl.textContent=(!isNaN(packagedG))?(qty+' × '+gpu+'g = '+packagedG.toFixed(1)+'g packaged'):'';
+  const end=parseFloat(document.getElementById('pkg-end').value);
+  if(isNaN(end)||o.menuGrams==null||isNaN(packagedG)){ line.textContent=''; return; }
+  const expectedEnd=Number(o.menuGrams)-packagedG;
+  const fv=end-expectedEnd;
+  line.innerHTML='Expected leftover '+expectedEnd.toFixed(0)+'g · final variance <b style="font-family:var(--mono);color:'+(Math.abs(fv)>100?'var(--red)':Math.abs(fv)>30?'var(--amber)':'var(--green)')+'">'+(fv>=0?'+':'')+fv.toFixed(0)+'g</b><br><span style="color:var(--text3);font-size:11px">Menu weight will update to '+end.toFixed(0)+'g</span>';
+}
+
+function pkgUpdateSubmitState(){
+  const o=_orderState.orders[_orderState.current]; if(!o) return;
+  const btn=document.getElementById('pkg-submit-btn');
+  const start=parseFloat(document.getElementById('pkg-start').value);
+  const off=(!isNaN(start)&&o.menuGrams!=null&&Math.abs(start-Number(o.menuGrams))>30);
+  const overrideChecked=document.getElementById('pkg-override').checked;
+  // If start is off-tolerance, require the override checkbox before submit.
+  const blocked=off&&!overrideChecked;
+  btn.disabled=blocked;
+  btn.style.opacity=blocked?'0.5':'1';
+  btn.style.cursor=blocked?'not-allowed':'pointer';
+}
+
+async function confirmPackaging(){
+  const o=_orderState.orders[_orderState.current]; if(!o) return;
+  const start=parseFloat(document.getElementById('pkg-start').value);
+  const end=parseFloat(document.getElementById('pkg-end').value);
+  const qty=parseFloat(document.getElementById('pkg-qty').value);
+  const gpu=o._gpu;
+  if(isNaN(start)||isNaN(end)){ alert('Enter both starting and ending weight.'); return; }
+  if(isNaN(qty)||qty<0){ alert('Enter the number actually packaged.'); return; }
+  // packaged grams from the ACTUAL count typed (handles "till smalls" — any count)
+  const packagedG=(gpu!=null)?qty*gpu:0;
+  const off=(o.menuGrams!=null&&Math.abs(start-Number(o.menuGrams))>30);
+  const overrode=document.getElementById('pkg-override').checked;
+  if(off&&!overrode){ alert('Starting weight is off by more than 30g — confirm the override box first.'); return; }
+
+  const payload={
+    action:'submitPackaging',
+    rowIndex:o.rowIndex,
+    rfid:o.rfid,
+    startWeight:start,
+    endWeight:end,
+    actualQty:qty,
+    packagedG:packagedG,
+    overrode:off&&overrode,
+    countBy:document.getElementById('pkg-count').value.trim(),
+    verifiedBy:document.getElementById('pkg-verify').value.trim(),
+    labelVerifiedBy:document.getElementById('pkg-label').value.trim(),
+  };
+  const btn=document.getElementById('pkg-submit-btn');
+  btn.disabled=true; btn.textContent='Saving…';
+  try{
+    // text/plain avoids CORS preflight AND lets us read the response (unlike no-cors)
+    const res=await fetch(gsUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});
+    const json=await res.json();
+    if(!json.ok){ alert('Save failed: '+(json.error||'unknown')); btn.disabled=false; btn.textContent='Submit'; return; }
+    let msg='Saved. ';
+    if(json.menuUpdated) msg+='Weekly Menu updated to '+end.toFixed(0)+'g. ';
+    if(json.startFlagged) msg+='Start was off '+(json.startVar>=0?'+':'')+Math.round(json.startVar)+'g — package highlighted on the menu for lead review. ';
+    if(json.finalVar!=null) msg+='Final variance '+(json.finalVar>=0?'+':'')+Math.round(json.finalVar)+'g.';
+    if(json.menuAmbiguous) msg+=' NOTE: RFID did not match a single menu package, so the menu was NOT updated — tell a lead.';
+    closePkgModal();
+    btn.textContent='Submit';
+    renderOrders();
+    setTimeout(()=>alert(msg),100);
+  }catch(e){
+    alert('Save failed: '+e); btn.disabled=false; btn.textContent='Submit';
+  }
+}
 
 </script>
 </body>
