@@ -409,7 +409,6 @@ button { cursor: pointer; }
 <!-- NAV -->
 <div class="nav" id="main-nav">
   <button class="nav-tab active" onclick="showPage('assignments')" data-page="assignments" data-roles="lead,defoliator,fertigator,cloner,ipm,checker,postprod">My Tasks</button>
-  <button class="nav-tab" onclick="showPage('order')" data-page="order" data-roles="lead,postprod">Order</button>
   <button class="nav-tab" onclick="showPage('rooms')" data-page="rooms" data-roles="lead,defoliator,fertigator,cloner,ipm">Rooms</button>
   <button class="nav-tab" onclick="showPage('postprod')" data-page="postprod" data-roles="lead,postprod">Post Production</button>
   <button class="nav-tab" onclick="showPage('clonetracker')" data-page="clonetracker" data-roles="lead,cloner">Clone Tracker</button>
@@ -977,6 +976,7 @@ button { cursor: pointer; }
       <button class="nav-tab active" onclick="showPostTab('queue',this)" style="font-size:12px">Trim queue</button>
       <button class="nav-tab" onclick="showPostTab('history',this)" style="font-size:12px">Trim history</button>
       <button class="nav-tab" id="preroll-subtab-btn" onclick="showPostTab('preroll',this)" style="font-size:12px;display:none">Pre-roll priority</button>
+      <button class="nav-tab" onclick="showPostTab('order',this)" style="font-size:12px">Order</button>
     </div>
 
     <!-- TRIM QUEUE -->
@@ -1003,6 +1003,18 @@ button { cursor: pointer; }
     <div id="postsub-preroll" style="display:none">
       <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Sorted by Purpl Pro THC % — highest first. Shows available small bud weight per strain.</div>
       <div id="preroll-list" style="display:grid;gap:8px;margin-bottom:1.5rem"></div>
+    </div>
+
+    <!-- ORDER (packaging) -->
+    <div id="postsub-order" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px;color:var(--text2)">Work each order top to bottom. Enter weights as you go.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button onclick="renderOrders()" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+          <span id="order-status" style="font-size:11px;color:var(--text3)"></span>
+        </div>
+      </div>
+      <div id="order-list" style="display:grid;gap:10px;margin-bottom:1.5rem"></div>
     </div>
   </div>
 
@@ -1231,21 +1243,6 @@ button { cursor: pointer; }
       </div>
     </div>
     <div id="tuning-report-wrap"></div>
-  </div>
-
-  <!-- ══ PAGE: ORDER (packaging) ══ -->
-  <div id="page-order" class="page">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-      <div>
-        <div class="section-title">Order &amp; packaging</div>
-        <div style="font-size:12px;color:var(--text3);margin-top:2px" id="order-sub">Work each order top to bottom. Enter weights as you go.</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button onclick="renderOrders()" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
-        <span id="order-status" style="font-size:11px;color:var(--text3)"></span>
-      </div>
-    </div>
-    <div id="order-list" style="display:grid;gap:10px;margin-bottom:1.5rem"></div>
   </div>
 
   <!-- PACKAGING MODAL -->
@@ -2110,13 +2107,13 @@ function resolveRuleRooms(scopeRooms){
 // ROLE PERMISSIONS
 // ══════════════════════════════════════════════
 const ROLE_PERMISSIONS = {
-  lead:       {pages:['assignments','order','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
+  lead:       {pages:['assignments','rooms','postprod','clonetracker','today-log','calendar','rules','additive','ipm','checks','slack','settings','metrc','daily-review','supplies','blueprint','tuning'], roomView:'full'},
   defoliator: {pages:['assignments','rooms','today-log','calendar'], roomView:'defol'},
   fertigator: {pages:['assignments','rooms','clonetracker','today-log','calendar','rules','additive','checks','slack','metrc','supplies'], roomView:'basic'},
   cloner:     {pages:['assignments','rooms','clonetracker','today-log','calendar','metrc'], roomView:'basic'},
   ipm:        {pages:['assignments','rooms','today-log','calendar','checks','rules','additive','ipm'], roomView:'basic'},
   checker:    {pages:['assignments','today-log','calendar','checks'], roomView:'none'},
-  postprod:   {pages:['assignments','order','postprod','today-log','calendar','metrc'], roomView:'none'},
+  postprod:   {pages:['assignments','postprod','today-log','calendar','metrc'], roomView:'none'},
 };
 // Which METRC subtabs each role can see
 const METRC_ROLE_TABS = {
@@ -6857,6 +6854,8 @@ function showPostTab(tab,el){
   const histPane=document.getElementById('postsub-history');
   if(histPane) histPane.style.display=tab==='history'?'block':'none';
   document.getElementById('postsub-preroll').style.display=tab==='preroll'?'block':'none';
+  const orderPane=document.getElementById('postsub-order');
+  if(orderPane) orderPane.style.display=tab==='order'?'block':'none';
   if(tab==='queue'){
     const addBtn=document.getElementById('add-trim-btn');
     if(addBtn) addBtn.style.display=currentRole==='lead'?'inline-flex':'none';
@@ -6866,6 +6865,7 @@ function showPostTab(tab,el){
   }
   if(tab==='history') renderTrimHistory();
   if(tab==='preroll') renderPrerollPriority();
+  if(tab==='order') renderOrders();
 }
 
 
@@ -6937,7 +6937,6 @@ function showPage(page){
     pullConfigFromCloud(true).then(()=>renderCloneTracker()).catch(()=>{});
   }
   if(page==='metrc'){updateMetrcSyncLabel();buildMetrcTabNav();pullMetrcFromCloud(true);}
-  if(page==='order'){ renderOrders(); }
   if(page==='postprod'){
     // Show pre-roll sub-tab for leads only
     const prerollBtn=document.getElementById('preroll-subtab-btn');
