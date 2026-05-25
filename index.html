@@ -14131,11 +14131,12 @@ async function renderOrders(){
 }
 
 function orderCardHTML(o,i){
-  const isLead=currentRole==='lead';
   const done=(o.status||'').toUpperCase().indexOf('PACKAGED')>=0;
   const flagged=(o.status||'').toUpperCase()==='FLAGGED';
   const gpu=o.gramsPerUnit!=null?o.gramsPerUnit:gramsPerUnitJS(o.size);
-  const need=(gpu!=null && o.qtyOrdered)?(Number(o.qtyOrdered)*gpu):null;
+  // only compute a "need" figure when the ordered qty is a real number
+  const qtyNum=Number(o.qtyOrdered);
+  const need=(gpu!=null && o.qtyOrdered!=='' && !isNaN(qtyNum))?(qtyNum*gpu):null;
   let statusBadge='';
   if(flagged) statusBadge='<span class="tag" style="background:var(--red-dim);color:var(--red);font-size:10px">FLAGGED</span>';
   else if(done) statusBadge='<span class="tag" style="background:var(--green-dim);color:var(--green);font-size:10px">✓ Packaged</span>';
@@ -14143,17 +14144,18 @@ function orderCardHTML(o,i){
 
   const varLine=(o.variance)?('<span style="font-family:var(--mono);font-size:11px;color:'+((String(o.variance).indexOf('-')>=0||Math.abs(parseFloat(o.variance))>30)?'var(--red)':'var(--text2)')+'">Var '+esc(String(o.variance))+'</span>'):'';
   const ambiguous=o.menuAmbiguous?'<div style="font-size:11px;color:var(--amber);margin-top:4px">⚠ RFID not matched to a single Weekly Menu package — lead must fix the RFID before packaging.</div>':'';
+  // detail line: RFID · size · qty (+ need only when numeric). NO price, ever.
+  const detail='RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+' · Qty '+esc(String(o.qtyOrdered))+(need!=null?(' · '+need+'g'):'');
+  const pkgTag=o.wsNotes?('<span class="tag" style="background:var(--bg4);color:var(--text2);font-size:10px;font-family:var(--mono)">Pkg# '+esc(o.wsNotes)+'</span>'):'';
 
   return '<div class="card" style="border-left:3px solid '+(flagged?'var(--red)':done?'var(--green)':'var(--border)')+'">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
       '<div>'+
         '<div style="font-size:14px;font-weight:600;color:var(--text)">'+esc(o.strain)+' <span style="font-weight:400;color:var(--text3);font-size:12px">'+esc(o.brand)+'</span></div>'+
-        '<div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px">RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+' · Qty '+esc(String(o.qtyOrdered))+(need!=null?(' · need '+need+'g'):'')+'</div>'+
-        (o.wsNotes?'<div style="font-size:11px;color:var(--text2);margin-top:3px">'+esc(o.wsNotes)+'</div>':'')+
-        (isLead&&o.ppu?'<div style="font-size:11px;color:var(--text3);margin-top:3px">PPU $'+esc(String(o.ppu))+'</div>':'')+
+        '<div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px">'+detail+'</div>'+
         ambiguous+
       '</div>'+
-      '<div style="text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+statusBadge+varLine+'</div>'+
+      '<div style="text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+statusBadge+pkgTag+varLine+'</div>'+
     '</div>'+
     '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+
       '<button class="btn-primary" style="font-size:12px;padding:7px 14px" '+(o.menuAmbiguous?'disabled style="opacity:.5"':'')+' onclick="openPkgModal('+i+')">'+(done?'Edit packaging':'Package this')+'</button>'+
