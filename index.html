@@ -447,6 +447,7 @@ button { cursor: pointer; }
     <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0">
       <button class="nav-tab active" onclick="showCloneTab('weekly',this)" id="ctab-weekly" style="font-size:12px">Weekly cuts</button>
       <button class="nav-tab" onclick="showCloneTab('mothers',this)" id="ctab-mothers" style="font-size:12px">Mother rotation</button>
+      <button class="nav-tab" onclick="showCloneTab('destroy',this)" id="ctab-destroy" style="font-size:12px">Clone destruction</button>
     </div>
 
     <!-- WEEKLY CUTS SUB-PAGE -->
@@ -476,16 +477,16 @@ button { cursor: pointer; }
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
           <div>
-            <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:5px;font-weight:600">Clones cut</label>
-            <input id="ce-count" type="number" min="1" inputmode="numeric" placeholder="0"
-              style="width:100%;font-size:22px;font-weight:700;text-align:center;padding:12px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono);box-sizing:border-box"/>
-          </div>
-          <div>
             <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:5px;font-weight:600">Mother tag <span style="font-weight:400">(last 4)</span></label>
             <input id="ce-mother-tag" type="text" maxlength="4" inputmode="numeric" placeholder="2184"
               style="width:100%;font-size:22px;font-weight:700;text-align:center;letter-spacing:.2em;padding:12px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono);box-sizing:border-box"
               oninput="onMotherTagInput(this.value)"/>
             <div id="ce-mother-hint" style="font-size:11px;color:var(--text3);margin-top:4px;min-height:16px;line-height:1.4"></div>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:5px;font-weight:600">Clones cut</label>
+            <input id="ce-count" type="number" min="1" inputmode="numeric" placeholder="0"
+              style="width:100%;font-size:22px;font-weight:700;text-align:center;padding:12px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono);box-sizing:border-box"/>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -571,6 +572,70 @@ button { cursor: pointer; }
       </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════════════════════
+         CLONE DESTRUCTION SUB-PAGE
+         Reads METRC_immature (filter: Type=Clone|Seed, Hold=FALSE)
+         Groups by strain → batch date → individual batch
+         Stage 1: read-only view proving counts pull correctly
+    ═══════════════════════════════════════════════════════════════ -->
+    <div id="clone-sub-destroy" style="display:none">
+      <div class="row mb12">
+        <div class="section-title">Clone destruction</div>
+        <div style="flex:1"></div>
+        <div id="cd-freshness" style="font-size:11px;color:var(--text3);text-align:right;line-height:1.4"></div>
+      </div>
+
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px;line-height:1.5">
+        Stage 1 preview — read-only. Enter a strain to see active clone batches from METRC_immature. Numbers should match METRC exactly. Entry UI and CSV export come in Stage 2 once counts are verified.
+      </div>
+
+      <!-- Strain typeahead -->
+      <div style="margin-bottom:14px">
+        <label style="font-size:12px;color:var(--text3);display:block;margin-bottom:5px;font-weight:600">Strain</label>
+        <input id="cd-strain-input" type="text" placeholder="Start typing a strain name…"
+          list="cd-strain-list"
+          oninput="renderCloneDestruction()"
+          style="width:100%;font-size:15px;padding:10px 12px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box"/>
+        <datalist id="cd-strain-list"></datalist>
+      </div>
+
+      <!-- Batch grid — grouped by date -->
+      <div id="cd-batch-grid"></div>
+
+      <!-- Empty state -->
+      <div id="cd-empty" style="text-align:center;padding:40px 20px;color:var(--text3);font-size:12px;display:none">
+        Enter a strain above to see its active clone batches from METRC_immature.
+      </div>
+
+      <!-- Session subtotal + review — appears when at least one batch has a destroy count entered.
+           Session state is kept in _cdSession (a map of batch → count). Persists across strain
+           searches so users can queue destructions across multiple strains in one session. -->
+      <div id="cd-session-bar" style="display:none;position:sticky;bottom:0;background:var(--bg);border-top:2px solid var(--amber);padding:12px 16px;margin:16px -16px 0;box-shadow:0 -4px 12px rgba(0,0,0,0.15)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--amber);margin-bottom:2px">Destruction session</div>
+            <div id="cd-session-summary" style="font-size:13px;color:var(--text)"></div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onclick="clearCloneDestructionSession()" style="font-size:11px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Clear session</button>
+            <button onclick="reviewCloneDestructionSession()" class="btn-primary" style="font-size:12px;padding:6px 16px">Review & submit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- CLONE DESTRUCTION REVIEW MODAL -->
+  <div class="modal-bg" id="cd-review-modal-bg">
+    <div class="modal" style="max-width:640px">
+      <h3 style="margin-top:0">Review destruction session</h3>
+      <div id="cd-review-body" style="margin:14px 0;max-height:60vh;overflow-y:auto"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button class="btn-cancel" onclick="closeCloneDestructionReview()">Cancel</button>
+        <button class="btn-primary" onclick="submitCloneDestructionForApproval()" id="cd-submit-btn">Submit destructions</button>
+      </div>
+    </div>
   </div>
 
   <!-- MOTHER GEN MODAL -->
@@ -1011,6 +1076,7 @@ button { cursor: pointer; }
         <div style="font-size:13px;color:var(--text2)">Work each order top to bottom. Enter weights as you go.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button onclick="renderOrders()" style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">↻ Refresh</button>
+          <button onclick="clearMetrcItemsCache()" title="Force-refresh the METRC item catalog. Use after editing the METRC_Items sheet directly." style="font-size:11px;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">↻ METRC items</button>
           <span id="order-status" style="font-size:11px;color:var(--text3)"></span>
         </div>
       </div>
@@ -1207,7 +1273,7 @@ button { cursor: pointer; }
   <div id="page-blueprint" class="page">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <div>
-        <div class="section-title">Maxx OS v1.5 — Growlink Blueprint</div>
+        <div class="section-title">Maxx OS v1.6 Peak — Fortress Finish · Growlink Blueprint</div>
         <div style="font-size:12px;color:var(--text3);margin-top:2px">Phase setpoints · Alert thresholds (amber = T2 log, red = T1 Slack after sustain)</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1267,6 +1333,11 @@ button { cursor: pointer; }
         <div id="pkg-final-line" style="font-size:12px;margin:-4px 0 10px;color:var(--text2)"></div>
       </div>
 
+      <div id="pkg-smalls-row">
+        <label>Smalls weight (g) <span style="color:var(--text3);font-weight:400">(optional — noted on the Weekly Menu)</span></label>
+        <input id="pkg-smalls" type="number" inputmode="decimal" step="0.1" placeholder="weight of small buds from this package"/>
+      </div>
+
       <label>1st count by</label>
       <input id="pkg-count" type="text" placeholder="who counted"/>
       <label>Count verified by</label>
@@ -1283,7 +1354,8 @@ button { cursor: pointer; }
 
       <div class="modal-btns">
         <button class="btn-cancel" onclick="closePkgModal()">Cancel</button>
-        <button class="btn-primary" id="pkg-submit-btn" onclick="confirmPackaging()">Submit</button>
+        <button class="btn-cancel" id="pkg-save-btn" onclick="savePackagingProgress()" style="border-color:var(--amber);color:var(--amber)">Save progress</button>
+        <button class="btn-primary" id="pkg-submit-btn" onclick="confirmPackaging()">Complete packaging</button>
       </div>
     </div>
   </div>
@@ -1345,7 +1417,7 @@ button { cursor: pointer; }
 // DATA
 // ══════════════════════════════════════════════
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
-const APP_VERSION = '3.8'; // Maxx OS v1.5 + EC Rainbow v1.3.2: revised ripening cascade, daily EC ramp, X3 shortened to 64-66
+const APP_VERSION = '3.9'; // Maxx OS v1.6 Peak Fortress Finish (2026-07-30) + EC Rainbow v1.3.2: FH1 split into FH1a/FH1b, VPD-anchored back-half, RH ratchet-down for bud-rot protection
 const CYCLE = 66; const FLOWER_DAYS = 65; const DARK_DAYS = 0; // No dark period — harvest = flip + 65 = Day 66
 const CLONE_LEAD = 28; const TALL_ROOMS = ['r4','r5'];
 const PAIRED = ['r1','r2'];
@@ -1383,23 +1455,44 @@ let rooms = L('wg_rooms_v2', DEFAULT_ROOMS);
 rooms = rooms.map((r,i)=>({...DEFAULT_ROOMS[i],...r}));
 
 const ADDITIVES={
-  29:{name:'Supa Stiky',dose:'2.0 ml/gal',pill:'pill-stiky',tier2:true},
-  31:{name:'H&G Amino Treatment',dose:'0.3 ml/gal',pill:'pill-amino',tier2:true},
-  32:{name:'Supa Stiky',dose:'2.0 ml/gal',pill:'pill-stiky',tier2:true},
-  33:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
-  35:{name:'SLF-100',dose:'2.0 ml/gal',pill:'pill-slf',tier2:true},
-  36:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
-  38:{name:'H&G Amino Treatment',dose:'0.3 ml/gal',pill:'pill-amino',tier2:true},
-  39:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
-  40:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
-  42:{name:'SLF-100',dose:'2.0 ml/gal',pill:'pill-slf',tier2:true},
-  43:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
-  45:{name:'H&G Amino Treatment',dose:'0.3 ml/gal',pill:'pill-amino',tier2:true},
-  46:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
-  47:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
-  49:{name:'SLF-100 + Drip Clean',dose:'2.0 + 0.4 ml/gal',pill:'pill-slf',tier2:true},
-  50:{name:'Supa Stiky (X1)',dose:'2.0 ml/gal',pill:'pill-stiky',tier2:true},
-  56:{name:'Supa Stiky (X1)',dose:'2.0 ml/gal',pill:'pill-stiky',tier2:true},
+  // S1 Blue — Peak Entry (D29–35, EC 2.8→3.0)
+  29:{name:'Mammoth P (TRIAL)',dose:'1.0 ml/gal',pill:'pill-stack',tier2:true,wand:'W#1'},
+  30:{name:'Supa Stiky',dose:'3.0 ml/gal',pill:'pill-stiky',tier2:true},
+  31:{name:'Recharge (TRIAL)',dose:'wand tea only',pill:'pill-amino',tier2:true,wand:'W#2'},
+  32:{name:'Botanicare Vitamino',dose:'5.0 ml/gal',pill:'pill-amino',tier2:true},
+  33:{name:'Supa Stiky',dose:'3.0 ml/gal',pill:'pill-stiky',tier2:true,wand:'W#3'},
+  34:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
+  35:{name:'Base',dose:'—',pill:'pill-base',tier2:false},
+  // S2 Indigo — True Peak (D36–42, EC 3.0 HOLD)
+  36:{name:'Mammoth P (TRIAL)',dose:'1.0 ml/gal',pill:'pill-stack',tier2:true,wand:'W#1'},
+  37:{name:'Supa Stiky',dose:'6.0 ml/gal',pill:'pill-stiky',tier2:true},
+  38:{name:'Recharge (TRIAL)',dose:'wand tea only',pill:'pill-amino',tier2:true,wand:'W#2'},
+  39:{name:'Botanicare Vitamino',dose:'5.0 ml/gal',pill:'pill-amino',tier2:true},
+  40:{name:'Supa Stiky',dose:'6.0 ml/gal',pill:'pill-stiky',tier2:true,wand:'W#3'},
+  41:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
+  42:{name:'Base',dose:'—',pill:'pill-base',tier2:false},
+  // S3 Violet — Peak HOLD (D43–49, EC 3.0 HOLD)
+  43:{name:'Mammoth P (TRIAL)',dose:'1.0 ml/gal',pill:'pill-stack',tier2:true,wand:'W#1'},
+  44:{name:'Supa Stiky',dose:'6.0 ml/gal',pill:'pill-stiky',tier2:true},
+  45:{name:'Recharge (TRIAL)',dose:'wand tea only',pill:'pill-amino',tier2:true,wand:'W#2'},
+  46:{name:'Botanicare Vitamino (FINAL amino)',dose:'5.0 ml/gal',pill:'pill-amino',tier2:true},
+  47:{name:'Supa Stiky',dose:'6.0 ml/gal',pill:'pill-stiky',tier2:true,wand:'W#3'},
+  48:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
+  49:{name:'Base (no SLF)',dose:'—',pill:'pill-base',tier2:false},
+  // S4 FILL HOLD — engine ON (D50–56, EC 2.9 HOLD)
+  50:{name:'Mammoth P (TRIAL) — FILL HOLD opens',dose:'1.0 ml/gal',pill:'pill-stack',tier2:true,wand:'W#1'},
+  51:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
+  52:{name:'Recharge (TRIAL)',dose:'wand tea only',pill:'pill-amino',tier2:true,wand:'W#2'},
+  53:{name:'Athena Stack (KEY precursor)',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
+  54:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true,wand:'W#3'},
+  55:{name:'Base',dose:'—',pill:'pill-base',tier2:false},
+  56:{name:'Athena Stack',dose:'1.0–1.5 ml/gal',pill:'pill-stack',tier2:true},
+  // S5 Fill-Hold Close (D57–60, EC 2.9→2.8)
+  57:{name:'Mammoth P (FINAL)',dose:'1.0 ml/gal',pill:'pill-stack',tier2:true,wand:'W#1'},
+  58:{name:'Supa Stiky',dose:'4.0 ml/gal',pill:'pill-stiky',tier2:true},
+  59:{name:'Recharge (FINAL)',dose:'wand tea only',pill:'pill-amino',tier2:true,wand:'W#2'},
+  60:{name:'SLF-100 — FILL WINDOW CLOSE',dose:'2.0 ml/gal',pill:'pill-slf',tier2:true},
+  // Compressed Finish (D61–66) — Base / plain only, no tank additives, plain wands continue
 };
 
 const DEFOL_WINDOWS=[
@@ -1466,7 +1559,27 @@ function phaseReminders(room){
   const fd=flowerDay(room);
   if(!fd) return [];
   const reminders=[];
-  if(fd===29) reminders.push({type:'reminder',icon:'💧',text:'Day 29 — Turn down humidifiers. RH target drops to 58% (S1 Stack phase).'});
+  // Humidifier reminders — both remotely controllable, no weekend shift.
+  // D29: turn down (S1 Stack RH drops to 58%).
+  // D50: turn OFF entirely — Fortress Finish opens, RH drops to 53%/52%
+  //      day/night. Humidifiers running here would fight the dehumidifiers.
+  if(fd===29) {
+    reminders.push({type:'reminder',icon:'💧',text:'Day 29 — Turn down humidifiers. RH target drops to 58% (S1 Stack phase).'});
+  }
+  if(fd===50) {
+    reminders.push({type:'reminder',icon:'💧',text:'Day 50 — Turn OFF humidifiers. Fortress Finish opens (FH1a), RH drops to 53% day / 52% night.'});
+  }
+  // Air filter reminder can't be done remotely — needs someone on-site. If D29
+  // lands on Sat or Sun, push the reminder to Monday. That means it may show
+  // on Day 29 (weekday), Day 30 (D29 was Sunday), or Day 31 (D29 was Saturday).
+  const _dow = new Date().getDay();   // 0=Sun, 1=Mon, ..., 6=Sat
+  const _airFilterToday =
+    (fd===29 && _dow >= 1 && _dow <= 5) ||   // D29 falls on a weekday — show today
+    ((fd===30 || fd===31) && _dow === 1);    // D29 was Sat/Sun — show on Monday
+  if(_airFilterToday) {
+    const _delayed = (fd!==29) ? ' (delayed from weekend)' : '';
+    reminders.push({type:'reminder',icon:'🌬️',text:'Day 29 — Replace Air Filters.'+_delayed});
+  }
   return reminders;
 }
 
@@ -1510,7 +1623,9 @@ function getDefolTasksForRoom(room){
 
 function getAdditiveForRoom(room){
   const fd=flowerDay(room);
-  if(fd===null||fd<1||fd>57)return null;
+  if(fd===null||fd<1||fd>66)return null;
+  // D61–66 is compressed finish landing — base/plain only, no tank additives.
+  if(fd>=61)return {name:'Base / plain only — landing',dose:'—',pill:'pill-base',tier2:false};
   return ADDITIVES[fd]||{name:'Base feed only',dose:'—',pill:'pill-base',tier2:false};
 }
 
@@ -2269,6 +2384,23 @@ function renderRooms(){
     const additive=getAdditiveForRoom(room);
     const overrides=roomOverrides[room.id]||{};
 
+    // Additive-of-the-day panel — always shown at the bottom of the card
+    // when the room is in flower and inside the day range (1–66). All roles
+    // see this so packagers/growers know what today's tank additive is.
+    let additiveHTML='';
+    if(additive && (stage==='flower' || stage==='late') && fd!==null && fd>=1 && fd<=66){
+      const wandTag = additive.wand ? `<span style="font-size:10px;font-weight:600;color:var(--purple);background:var(--purple-dim);padding:2px 7px;border-radius:var(--r);margin-left:6px">Wand ${additive.wand}</span>` : '';
+      const tierTag = additive.tier2 ? `<span style="font-size:9px;font-weight:600;color:var(--amber);background:var(--amber-bg);padding:2px 6px;border-radius:var(--r);margin-left:6px">Tier 2</span>` : '';
+      additiveHTML = `<div style="margin-top:10px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);border-left:3px solid var(--green)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:4px">Today\'s additive · Day ${fd}</div>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+          <span class="add-pill ${additive.pill}" style="font-size:11px">${additive.name}</span>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--text2);margin-left:4px">${additive.dose}</span>
+          ${wandTag}${tierTag}
+        </div>
+      </div>`;
+    }
+
     let stageClass='stage-'+stage;
     let badgeClass='badge-'+stage;
     let badgeText=stage==='veg'?'Veg':stage==='flower'?'Flower':stage==='late'?'Late flower':stage==='harvest'?'Harvest':stage==='empty'?'Empty':'—';
@@ -2368,11 +2500,9 @@ function renderRooms(){
         taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${dt.label}<span class="sub">${_phaseDetail}</span>${dt.daysLeft!==undefined?`<span class="sub" style="margin-top:2px">${dt.daysLeft===0?'<span class="alert-txt">Last day</span>':dt.daysLeft+' days remaining'}</span>`:''}${winBar}</div></div>`);
       }
     }
-    // lead and fertigator see additive
-    if((roomView==='full')&&additive&&stage==='flower'){
-      const dotCls=additive.tier2?'dot-amber':'dot-gray';
-      taskList.push(`<div class="task-item-sm"><span class="task-dot ${dotCls}"></span><div class="task-text">${additive.name}<span class="sub">${additive.dose}${additive.tier2?' · Tier 2':''}</span></div></div>`);
-    }
+    // Additive display consolidated into the bottom-of-card "Today's additive"
+    // panel (see additiveHTML above). Removed from task list to avoid showing
+    // twice for lead/fertigator roles.
     // Flower schedule events for today (lead-defined day-of-flower reminders).
     // Visible to anyone who can see the room — these are operational reminders
     // (defol windows, environment changes, irrigation tweaks) the whole crew
@@ -2412,7 +2542,7 @@ function renderRooms(){
         </div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${badges.join('')}</div>
       </div>
-      ${tlHTML}${progHTML}${phaseHTML}${nudgeHTML}
+      ${tlHTML}${progHTML}${phaseHTML}${renderHealthBannerHTML(room.name)}${nudgeHTML}
       ${(()=>{
         // Growlink live env strip
         const gl=getGrowlinkForRoom(room.name);
@@ -2537,6 +2667,7 @@ function renderRooms(){
           ${strainPills}
         </div>`;
       })()}
+      ${additiveHTML}
       ${taskHTML}
       ${room.note?`<div style="font-size:11px;color:var(--text3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">${room.note}</div>`:''}
     `;
@@ -2621,8 +2752,11 @@ function getScoutHistory(roomId, daysBack){
     const iso = dateToIso(d);
     const log = L('wg_log_'+iso, []);
     log.forEach(e => {
+      // Skip soft-deleted (tombstoned) entries — edit/delete propagates across
+      // devices via the editedAt last-write-wins merge in pullConfigFromCloud.
+      if(e.deleted) return;
       if(e.taskId === 'ipm_scout' && e.roomId === roomId && e.status === 'done'){
-        out.push({date: iso, time: e.time||'', who: e.who||'', notes: e.notes||'', pct: e.pct||''});
+        out.push({id: e.id, date: iso, time: e.time||'', who: e.who||'', notes: e.notes||'', pct: e.pct||'', editedBy: e.editedBy||'', editedAt: e.editedAt||''});
       }
     });
   }
@@ -2635,7 +2769,12 @@ function countScoutHistory(roomId){
   return getScoutHistory(roomId, 14).length;
 }
 
+// Holds the room currently shown in the scout-history modal so edit/delete
+// handlers know what to re-render after a change.
+let _scoutHistCtx = { roomId:null, roomName:'' };
+
 function showScoutHistory(roomId, roomName){
+  _scoutHistCtx = { roomId: roomId, roomName: roomName };
   const entries = getScoutHistory(roomId, 30);
   let bg = document.getElementById('scout-history-modal-bg');
   if(!bg){
@@ -2655,22 +2794,28 @@ function showScoutHistory(roomId, roomName){
             return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
           } catch(_){ return e.date; }
         })();
-        return `<div style="border-bottom:1px solid var(--border);padding:10px 0">
+        const editedTag = e.editedAt ? `<span style="font-size:10px;color:var(--amber);font-style:italic">edited${e.editedBy?' by '+esc(e.editedBy):''}</span>` : '';
+        return `<div id="scout-row-${e.id}" style="border-bottom:1px solid var(--border);padding:10px 0">
           <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
             <div style="font-size:13px;font-weight:600;color:var(--text)">${dLabel}${e.time?` · <span style="font-weight:400;color:var(--text3)">${e.time}</span>`:''}</div>
-            <div style="font-size:11px;color:var(--text3)">${e.who||''}</div>
+            <div style="font-size:11px;color:var(--text3)">${esc(e.who||'')}</div>
           </div>
-          ${e.pct?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${e.pct}% canopy</div>`:''}
-          ${e.notes?`<div style="font-size:12px;color:var(--text2);margin-top:4px;white-space:pre-wrap">${e.notes}</div>`:'<div style="font-size:11px;color:var(--text3);margin-top:4px;font-style:italic">No notes recorded</div>'}
+          ${e.pct?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(e.pct)}% canopy</div>`:''}
+          ${e.notes?`<div style="font-size:12px;color:var(--text2);margin-top:4px;white-space:pre-wrap">${esc(e.notes)}</div>`:'<div style="font-size:11px;color:var(--text3);margin-top:4px;font-style:italic">No notes recorded</div>'}
+          <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+            ${editedTag}
+            <button onclick="beginScoutEdit(${e.id},'${e.date}','${roomId}')" style="margin-left:auto;font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--teal);cursor:pointer">Edit</button>
+            <button onclick="deleteScoutEntry(${e.id},'${e.date}')" style="font-size:11px;padding:3px 9px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--red);cursor:pointer">Delete</button>
+          </div>
         </div>`;
       }).join('')
     : '<div style="text-align:center;padding:24px;color:var(--text3);font-size:13px">No scouting history found in the last 30 days.</div>';
   modal.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div style="font-size:14px;font-weight:700;color:var(--text)">Scout history — ${roomName}</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text)">Scout history — ${esc(roomName)}</div>
       <button onclick="closeScoutHistory()" style="font-size:12px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Close</button>
     </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Last 30 days</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Last 30 days · edits & deletes sync to everyone</div>
     <div>${rows}</div>
   `;
   bg.classList.add('open');
@@ -2679,6 +2824,71 @@ function showScoutHistory(roomId, roomName){
 function closeScoutHistory(){
   const bg = document.getElementById('scout-history-modal-bg');
   if(bg) bg.classList.remove('open');
+}
+
+// ── Scout entry edit / delete ──────────────────────────────────────────────
+// Scouts are stored as today-log rows (taskId 'ipm_scout'). Editing or deleting
+// one stamps editedAt/editedBy and persists; the change rides the normal config
+// sync (pushConfigToCloud → backend merge → pullConfigFromCloud LWW) so it shows
+// for everyone. Delete is a soft tombstone (deleted:true) — a hard delete would
+// resurrect when a stale device re-pushes the row.
+function _findLogEntry(date, id){
+  const log = L('wg_log_'+date, []);
+  const idx = log.findIndex(e => e && e.id === id);
+  return { log, idx };
+}
+function _persistLogDay(date, log){
+  S('wg_log_'+date, log);
+  if(date === dateToIso(TODAY)){ todayLog = log; }
+  pushConfigToCloud(true); // immediate — the correction must land before navigation
+  try { renderAssignments(); } catch(_){}
+  try { renderTodayLog(); } catch(_){}
+}
+function beginScoutEdit(id, date, roomId){
+  const { log, idx } = _findLogEntry(date, id);
+  if(idx < 0) return;
+  const e = log[idx];
+  const row = document.getElementById('scout-row-'+id);
+  if(!row) return;
+  const roomOpts = rooms.map(r => `<option value="${r.id}"${r.id===e.roomId?' selected':''}>${esc(r.name)}</option>`).join('');
+  row.innerHTML = `
+    <div style="padding:4px 0">
+      <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Correcting a scout logged ${date}${e.time?' · '+e.time:''}${e.who?' by '+esc(e.who):''}</div>
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:2px">Room</label>
+      <select id="scout-edit-room-${id}" style="width:100%;padding:7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px">${roomOpts}</select>
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:2px">% canopy (optional)</label>
+      <input id="scout-edit-pct-${id}" type="number" inputmode="decimal" value="${esc(e.pct||'')}" style="width:100%;padding:7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px"/>
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:2px">Notes</label>
+      <textarea id="scout-edit-notes-${id}" rows="3" style="width:100%;padding:7px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg);color:var(--text);font-size:13px;resize:vertical">${esc(e.notes||'')}</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="saveScoutEdit(${id},'${date}')" style="font-size:12px;padding:6px 14px;border-radius:var(--r);border:1px solid var(--teal);background:var(--teal);color:#fff;cursor:pointer">Save</button>
+        <button onclick="showScoutHistory(_scoutHistCtx.roomId,_scoutHistCtx.roomName)" style="font-size:12px;padding:6px 14px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer">Cancel</button>
+      </div>
+    </div>`;
+}
+function saveScoutEdit(id, date){
+  const { log, idx } = _findLogEntry(date, id);
+  if(idx < 0) return;
+  const roomSel = document.getElementById('scout-edit-room-'+id);
+  const pctEl   = document.getElementById('scout-edit-pct-'+id);
+  const notesEl = document.getElementById('scout-edit-notes-'+id);
+  if(roomSel) log[idx].roomId = roomSel.value;
+  if(pctEl)   log[idx].pct    = pctEl.value.trim();
+  if(notesEl) log[idx].notes  = notesEl.value.trim();
+  log[idx].editedAt = new Date().toISOString();
+  log[idx].editedBy = loggedInMember ? loggedInMember.name : 'Unknown';
+  _persistLogDay(date, log);
+  showScoutHistory(_scoutHistCtx.roomId, _scoutHistCtx.roomName);
+}
+function deleteScoutEntry(id, date){
+  if(!confirm('Delete this scout entry? It will be removed for everyone on the app.')) return;
+  const { log, idx } = _findLogEntry(date, id);
+  if(idx < 0) return;
+  log[idx].deleted  = true;
+  log[idx].editedAt = new Date().toISOString();
+  log[idx].editedBy = loggedInMember ? loggedInMember.name : 'Unknown';
+  _persistLogDay(date, log);
+  showScoutHistory(_scoutHistCtx.roomId, _scoutHistCtx.roomName);
 }
 
 function buildAssignments(role){
@@ -4021,7 +4231,13 @@ function _findIpmRuleById(ruleId){
 
 function markIpmDone(ruleId, roomId, dueDate, note){
   const rule=_findIpmRuleById(ruleId);
-  if(!rule) return;
+  if(!rule){
+    // Silent return here was causing completions to vanish without feedback
+    // when rules got out of sync. Log loudly so the issue surfaces.
+    console.warn('[markIpmDone] rule not found for id:', ruleId, '— completion NOT recorded. Task will reappear.');
+    alert('Could not record completion — rule missing or out of sync. Please refresh the page and try again.');
+    return;
+  }
   ipmLog.push({
     id:Date.now()+'_'+Math.random().toString(36).slice(2,7),
     ruleId, ruleName:rule.name||'', product:rule.product||'',
@@ -4040,7 +4256,11 @@ function markIpmDone(ruleId, roomId, dueDate, note){
 
 function markIpmSkip(ruleId, roomId, dueDate, reason){
   const rule=_findIpmRuleById(ruleId);
-  if(!rule) return;
+  if(!rule){
+    console.warn('[markIpmSkip] rule not found for id:', ruleId, '— skip NOT recorded.');
+    alert('Could not record skip — rule missing or out of sync. Please refresh the page and try again.');
+    return;
+  }
   if(!reason){
     reason=prompt('Reason for skipping (optional):','')||'';
   }
@@ -4374,7 +4594,12 @@ async function logCloneCut(clearStrain=false,leadOverride=false){
   }
 
   // ── Append locally + sync ──
-  const session={strain,count,who,motherTag,motherLabel,time:fmtTime(),date:dateToIso(TODAY)};
+  // Session ID lets edits and deletes find the exact sheet row later, so
+  // the Clone_Log sheet stays in sync with what the app shows. Legacy
+  // sessions (from before this ship) won't have an ID — those get an
+  // explicit warning when edited so operators know the sheet wasn't updated.
+  const sessionId = 'cs_' + Date.now() + '_' + Math.floor(Math.random()*10000);
+  const session={sessionId,strain,count,who,motherTag,motherLabel,time:fmtTime(),date:dateToIso(TODAY)};
   if(leadOverride) session.override=true;
   cloneSessions.push(session);
   S(getWeekKey(),cloneSessions);
@@ -4398,7 +4623,9 @@ async function logCloneCut(clearStrain=false,leadOverride=false){
   // columns 3-9 for copy-paste. Final sheet row:
   // [ISO timestamp] | Who | Plant Number | Batch Name | Plants Type |
   // Plants Count | Location Name | Strain Name | Actual Date.
-  const sheetRow = [who, fullTag, batchName, 'Clone', count, CLONE_DEST_LOCATION, strain, actualDate];
+  // Column J holds the session ID — the primary key edits and deletes use
+  // to locate this row later. METRC copy-paste block stays as columns 3-9.
+  const sheetRow = [who, fullTag, batchName, 'Clone', count, CLONE_DEST_LOCATION, strain, actualDate, sessionId];
 
   // ── Sheet write WITH success confirmation ──
   setHint('Saving to sheet…','var(--text3)');
@@ -4526,12 +4753,12 @@ function renderCloneTracker(){
           <div class="log-title">${s.count} clones — ${strainWithCode(s.strain)}${s.motherTag?` <span style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:6px">mother …${s.motherTag}</span>`:''}</div>
           <div class="log-meta">${s.who} · ${s.date} · ${s.time}</div>
         </div>
-        ${(loggedInMember?.role==='lead'||loggedInMember?.name===s.who)?`<button onclick="editCloneSession(${i})" style="font-size:10px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer;flex-shrink:0;margin-top:2px">Edit</button>`:''}
+        ${(loggedInMember?.role==='lead'||loggedInMember?.name===s.who)?`<button onclick="editCloneSession(${i})" style="font-size:10px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text3);cursor:pointer;flex-shrink:0;margin-top:2px">Edit</button> <button onclick="deleteCloneSession(${i})" style="font-size:10px;padding:3px 8px;border-radius:var(--r);border:1px solid var(--red);background:none;color:var(--red);cursor:pointer;flex-shrink:0;margin-top:2px">Delete</button>`:''}
       </div>`).join('');
   }
 }
 
-function editCloneSession(idx){
+async function editCloneSession(idx){
   const s=cloneSessions[idx];
   if(!s) return;
   const newCount=prompt('Edit clone count:',s.count);
@@ -4539,10 +4766,58 @@ function editCloneSession(idx){
   const newStrain=prompt('Edit strain:',s.strain);
   if(newStrain===null) return;
   const newNote=prompt('Edit note (optional):',s.note||'');
-  cloneSessions[idx]={...s,count:parseInt(newCount)||s.count,strain:newStrain.trim()||s.strain,note:newNote};
+  const updated={...s,count:parseInt(newCount)||s.count,strain:newStrain.trim()||s.strain,note:newNote};
+  cloneSessions[idx]=updated;
   S(getWeekKey(),cloneSessions);
   renderCloneTracker();
   pushConfigToCloud(true);
+  // Sync the change to the Clone_Log sheet so exports stay truthful.
+  if(!s.sessionId){
+    alert('Edit saved in app.\n\nSheet row was NOT updated — this entry pre-dates the edit-sync fix and has no session ID. You may need to manually correct the row on the Clone_Log sheet.');
+    return;
+  }
+  try{
+    const res=await fetch(gsUrl,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({action:'updateCloneRow', sessionId:s.sessionId, fields:{count:updated.count, strain:updated.strain}})
+    });
+    const result=await res.json();
+    if(!result.ok){
+      alert('Edit saved in app but sheet update failed:\n\n'+(result.error||'unknown error')+'\n\nThe app and Clone_Log sheet are now OUT OF SYNC. Please correct the sheet manually or edit again to retry.');
+    }
+  }catch(e){
+    alert('Edit saved in app but sheet update failed (network error): '+String(e)+'\n\nThe app and Clone_Log sheet are now OUT OF SYNC.');
+  }
+}
+
+async function deleteCloneSession(idx){
+  const s=cloneSessions[idx];
+  if(!s) return;
+  const label = s.count + ' × ' + (s.strain||'?') + ' from ' + (s.motherLabel||s.motherTag||'?');
+  if(!confirm('Delete this clone entry?\n\n'+label+'\n\nThis removes the row from the Clone_Log sheet too. Cannot be undone.')) return;
+  // Remove locally first
+  const removed = cloneSessions.splice(idx, 1)[0];
+  S(getWeekKey(),cloneSessions);
+  renderCloneTracker();
+  pushConfigToCloud(true);
+  if(!removed.sessionId){
+    alert('Entry removed from app.\n\nSheet row was NOT deleted — this entry pre-dates the edit-sync fix and has no session ID. You may need to manually remove the row from the Clone_Log sheet.');
+    return;
+  }
+  try{
+    const res=await fetch(gsUrl,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({action:'deleteCloneRow', sessionId:removed.sessionId})
+    });
+    const result=await res.json();
+    if(!result.ok){
+      alert('Entry removed from app but sheet delete failed:\n\n'+(result.error||'unknown error')+'\n\nThe Clone_Log sheet still has this row. Please delete it manually.');
+    }
+  }catch(e){
+    alert('Entry removed from app but sheet delete failed (network error): '+String(e)+'\n\nThe Clone_Log sheet still has this row.');
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -4805,11 +5080,543 @@ function handleMotherFileUpload(input){
 
 function showCloneTab(tab,el){
   document.querySelectorAll('#page-clonetracker .nav-tab').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
+  if(el) el.classList.add('active');
   document.getElementById('clone-sub-weekly').style.display=tab==='weekly'?'block':'none';
   document.getElementById('clone-sub-mothers').style.display=tab==='mothers'?'block':'none';
-  if(tab==='mothers')renderMotherRotation();
-  if(tab==='weekly')renderCloneTracker();
+  document.getElementById('clone-sub-destroy').style.display=tab==='destroy'?'block':'none';
+  if(tab==='mothers') renderMotherRotation();
+  if(tab==='destroy') renderCloneDestruction();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// CLONE DESTRUCTION — Stage 1: data pipe + read-only view
+// ══════════════════════════════════════════════════════════════════════
+
+// Read METRC_immature and return active clone batches, filtered per spec:
+//   • Type must be Clone OR Seed (destruction tab is for immature plants only)
+//   • Hold must be FALSE (quarantined batches shouldn't be touched here)
+// Returns an array of {batch, strain, plants, destroyed, batchDate, sourcePlant}
+function getActiveCloneBatches(){
+  const rows = (metrcData && metrcData.immature) || [];
+  if(!rows.length) return [];
+  const out = [];
+  for(let i=0; i<rows.length; i++){
+    const r = rows[i];
+    // METRC_immature columns per Devon's confirmed schema:
+    //   A=Plant Batch, B=Strain, C=Location, D=Type, E=Hold,
+    //   F=Plants, G=Tracked, H=Packaged, I=Destroyed,
+    //   J=Source Package, K=Source Plant, L=Source Plant Batch, M=Batch Date
+    const type = String(r['Type'] || r['type'] || '').trim();
+    if(type !== 'Clone' && type !== 'Seed') continue;
+    const hold = String(r['Hold'] || r['hold'] || '').toUpperCase();
+    if(hold === 'TRUE') continue;
+    const batch = String(r['Plant Batch'] || r['batch'] || '').trim();
+    const strain = String(r['Strain'] || r['strain'] || '').trim();
+    if(!batch || !strain) continue;
+    const plants    = Number(r['Plants']    || r['plants']    || 0) || 0;
+    const destroyed = Number(r['Destroyed'] || r['destroyed'] || 0) || 0;
+    const batchDate = String(r['Batch Date'] || r['batchDate'] || r['batch_date'] || '').trim();
+    const sourcePlant = String(r['Source Plant'] || r['sourcePlant'] || '').trim();
+    // Layer in-app destructions submitted since last METRC upload — these
+    // aren't reflected in METRC_immature's Plants column until Devon re-uploads.
+    const pendingDestroyed = _cdPendingDestructions[batch] || 0;
+    const adjustedPlants    = Math.max(0, plants - pendingDestroyed);
+    const adjustedDestroyed = destroyed + pendingDestroyed;
+    out.push({batch, strain, plants:adjustedPlants, destroyed:adjustedDestroyed, batchDate, sourcePlant, type});
+  }
+  return out;
+}
+
+// Fetch and cache METRC_immature freshness signal. Called on tab open.
+let _cdFreshness = null;
+async function refreshCloneDestructionFreshness(){
+  if(!gsUrl){ console.warn('[freshness] no gsUrl'); return; }
+  try{
+    const res = await fetchWithTimeout(gsUrl+'?action=getImmatureLastModified&t='+Date.now(), null, 25000);
+    const json = await res.json();
+    if(!json || !json.ok){ console.warn('[freshness] bad response:', json); return; }
+    _cdFreshness = json.lastModified;
+    console.log('[freshness] loaded:', _cdFreshness);
+    // Also pull in-app pending destructions layered on top of METRC counts.
+    refreshCloneDestructionPending();
+    renderCloneDestruction();
+  }catch(e){
+    console.warn('[freshness] fetch failed:', e && e.message ? e.message : e);
+  }
+}
+
+// Pull the in-app destructions from Clone_Destructions submitted since the
+// last METRC upload. These get layered on top of METRC_immature's "Plants"
+// column so the UI reflects destructions the operator has already made,
+// even before they re-upload fresh METRC data.
+let _cdPendingDestructions = {};   // {batch: totalDestroyed}
+async function refreshCloneDestructionPending(){
+  if(!gsUrl) return;
+  try{
+    const since = _cdFreshness || '';
+    const url = gsUrl+'?action=getRecentCloneDestructions&since='+encodeURIComponent(since)+'&t='+Date.now();
+    const res = await fetchWithTimeout(url, null, 25000);
+    const json = await res.json();
+    if(!json || !json.ok){ console.warn('[pending] bad response:', json); return; }
+    _cdPendingDestructions = json.byBatch || {};
+    console.log('[pending] loaded', Object.keys(_cdPendingDestructions).length, 'batches with in-app destructions');
+    renderCloneDestruction();
+  }catch(e){
+    console.warn('[pending] fetch failed:', e && e.message ? e.message : e);
+  }
+}
+
+// Format the freshness label as "last uploaded Tue 8:32 AM · 4h ago" style
+function formatFreshnessLabel(iso){
+  if(!iso) return '';
+  const t = new Date(iso);
+  if(isNaN(t.getTime())) return '';
+  const now = Date.now();
+  const ageMs = now - t.getTime();
+  const ageMin = Math.floor(ageMs / 60000);
+  const ageHr  = Math.floor(ageMs / 3600000);
+  const ageDy  = Math.floor(ageMs / 86400000);
+  let ageStr;
+  if(ageMin < 60)        ageStr = ageMin + 'm ago';
+  else if(ageHr < 48)    ageStr = ageHr  + 'h ago';
+  else                   ageStr = ageDy  + 'd ago';
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const dow = days[t.getDay()];
+  let hr = t.getHours();
+  const period = hr >= 12 ? 'PM' : 'AM';
+  hr = hr % 12; if(hr === 0) hr = 12;
+  const mm = String(t.getMinutes()).padStart(2,'0');
+  return `METRC_immature last uploaded <b>${dow} ${hr}:${mm} ${period}</b> · ${ageStr}`;
+}
+
+function renderCloneDestruction(){
+  // Freshness banner
+  const freshnessEl = document.getElementById('cd-freshness');
+  if(freshnessEl) freshnessEl.innerHTML = formatFreshnessLabel(_cdFreshness) || '<span style="color:var(--text3)">Loading freshness…</span>';
+
+  const allBatches = getActiveCloneBatches();
+
+  // Datalist for typeahead — unique strains
+  const strains = Array.from(new Set(allBatches.map(b=>b.strain))).sort();
+  const dl = document.getElementById('cd-strain-list');
+  if(dl){
+    dl.innerHTML = strains.map(s=>`<option value="${s.replace(/"/g,'&quot;')}"></option>`).join('');
+  }
+
+  const input = document.getElementById('cd-strain-input');
+  const query = (input ? input.value : '').trim();
+  const grid = document.getElementById('cd-batch-grid');
+  const empty = document.getElementById('cd-empty');
+
+  if(!query){
+    if(grid) grid.innerHTML = '';
+    if(empty) empty.style.display = 'block';
+    return;
+  }
+  if(empty) empty.style.display = 'none';
+
+  // Filter to batches matching the strain typed
+  const q = query.toLowerCase();
+  const matching = allBatches.filter(b => b.strain.toLowerCase().indexOf(q) >= 0);
+
+  if(!matching.length){
+    if(grid) grid.innerHTML = `<div style="text-align:center;padding:30px 20px;color:var(--text3);font-size:12px">
+      No active clone batches found for "<b>${query}</b>". Check the spelling or verify METRC_immature is up to date.
+    </div>`;
+    return;
+  }
+
+  // Group by batchDate. Within each date, list individual batches.
+  const byDate = {};
+  matching.forEach(b => {
+    const d = b.batchDate || 'unknown';
+    if(!byDate[d]) byDate[d] = [];
+    byDate[d].push(b);
+  });
+
+  // Sort dates newest first
+  const dates = Object.keys(byDate).sort((a,b) => {
+    const da = new Date(a).getTime(); const db = new Date(b).getTime();
+    if(isNaN(da) && isNaN(db)) return 0;
+    if(isNaN(da)) return 1;
+    if(isNaN(db)) return -1;
+    return db - da;
+  });
+
+  const html = dates.map(dateKey => {
+    const batches = byDate[dateKey];
+    // METRC_immature semantics (confirmed w/ Devon 2026-09-04):
+    //   Plants column    = CURRENT effective count (already has destructions subtracted)
+    //   Destroyed column = cumulative destroyed count
+    //   Starting total   = Plants + Destroyed  (what the batch began with)
+    const totalEffective = batches.reduce((s,b) => s + b.plants,    0);
+    const totalDestroyed = batches.reduce((s,b) => s + b.destroyed, 0);
+    const totalStarting  = totalEffective + totalDestroyed;
+    const strainNameShown = batches[0].strain;
+
+    // data-cd-effective-base = the CURRENT effective count. Session destructions
+    // subtract from this to show the rolling "→ N after session" figure.
+    const totalKey = strainNameShown + '::' + dateKey;
+    return `<div style="margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)"
+           data-cd-total="${totalKey.replace(/"/g,'&quot;')}"
+           data-cd-strain="${strainNameShown.replace(/"/g,'&quot;')}"
+           data-cd-datekey="${dateKey.replace(/"/g,'&quot;')}"
+           data-cd-effective-base="${totalEffective}">
+        <div>
+          <span style="font-size:14px;font-weight:700">${strainNameShown}</span>
+          <span style="font-size:12px;color:var(--text3);margin-left:8px">Batch date: <b>${dateKey}</b></span>
+        </div>
+        <div style="font-size:11px;color:var(--text3)">
+          Strain total: <b style="color:var(--green)">${totalEffective}</b> plants · <b>${totalDestroyed}</b> destroyed · <b>${totalStarting}</b> starting total<span data-cd-live-remaining="${totalKey.replace(/"/g,'&quot;')}"></span>
+        </div>
+      </div>
+      <div class="grid-2" style="gap:10px">
+        ${batches.map(b => `
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px" data-batch="${b.batch}">
+            <div style="font-family:var(--mono);font-size:13px;font-weight:600;margin-bottom:8px">${b.batch}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;margin-bottom:10px">
+              <div>
+                <div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.05em">Plants</div>
+                <div style="font-size:16px;font-weight:700;color:var(--green)" data-effective="${b.plants}">${b.plants}</div>
+              </div>
+              <div>
+                <div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.05em">Destroyed</div>
+                <div style="font-size:16px;font-weight:700;color:${b.destroyed>0?'var(--red)':'var(--text3)'}">${b.destroyed}</div>
+              </div>
+              <div>
+                <div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.05em">Starting total</div>
+                <div style="font-size:16px;font-weight:700;color:var(--text)">${b.plants + b.destroyed}</div>
+              </div>
+            </div>
+            <!-- Stage 2: entry input. Max is b.plants (the effective count) — you can't destroy more than what's left alive. -->
+            <div style="display:flex;gap:6px;align-items:center;padding-top:8px;border-top:1px solid var(--border)">
+              <input type="number" min="0" max="${b.plants}" placeholder="0"
+                data-cd-input="${b.batch}"
+                data-max-destroy="${b.plants}"
+                data-cd-strain-key="${(b.strain + '::' + b.batchDate).replace(/"/g,'&quot;')}"
+                oninput="onCloneDestructionInput(this)"
+                style="flex:1;font-size:14px;font-weight:600;text-align:center;padding:7px 8px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono);box-sizing:border-box"/>
+              <span style="font-size:10px;color:var(--text3);white-space:nowrap">to destroy</span>
+            </div>
+            <!-- Live preview lines: batch-level effective, then strain-level rolling total -->
+            <div data-cd-preview="${b.batch}" style="font-size:11px;color:var(--text3);margin-top:6px;min-height:14px;text-align:right"></div>
+            <div data-cd-preview-strain="${b.batch}" style="font-size:11px;color:var(--text3);margin-top:2px;min-height:14px;text-align:right"></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  if(grid) grid.innerHTML = html;
+
+  // Trigger freshness fetch if we haven't yet
+  if(!_cdFreshness) refreshCloneDestructionFreshness();
+
+  // Re-apply any pending session entries to inputs after re-render (they get
+  // recreated when the user changes strain). Preserves session state across
+  // navigation within the tab.
+  applySessionToInputs();
+  updateSessionBar();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// STAGE 2 — Destruction session state + entry UI
+// ══════════════════════════════════════════════════════════════════════
+// Session is a map: batch name → { count, strain, batchDate, plants, destroyed }
+// Persists in memory while the user browses different strains, cleared on submit
+// or explicit Clear. NOT persisted to localStorage — sessions are per-sitting.
+let _cdSession = {};
+
+function onCloneDestructionInput(input){
+  const batch = input.getAttribute('data-cd-input');
+  const maxDestroy = Number(input.getAttribute('data-max-destroy')) || 0;
+  let n = parseInt(input.value, 10);
+  if(isNaN(n) || n < 0) n = 0;
+  // Clamp to max — can't destroy more than the current effective count
+  if(n > maxDestroy){
+    n = maxDestroy;
+    input.value = n;
+  }
+  // Find the batch record we're operating on
+  const all = getActiveCloneBatches();
+  const rec = all.find(b => b.batch === batch);
+  if(!rec) return;
+  if(n === 0){
+    delete _cdSession[batch];
+  } else {
+    _cdSession[batch] = {
+      count: n,
+      strain: rec.strain,
+      batchDate: rec.batchDate,
+      plants: rec.plants,
+      destroyed: rec.destroyed,
+    };
+  }
+  // Update preview line under this input
+  const preview = document.querySelector(`[data-cd-preview="${batch}"]`);
+  if(preview){
+    if(n > 0){
+      const remaining = maxDestroy - n;
+      preview.innerHTML = `→ <b>${remaining}</b> effective after this destruction`;
+      preview.style.color = 'var(--amber)';
+    } else {
+      preview.innerHTML = '';
+    }
+  }
+  updateSessionBar();
+}
+
+// After renderCloneDestruction rebuilds the DOM, restore any input values from the session.
+function applySessionToInputs(){
+  Object.keys(_cdSession).forEach(batch => {
+    const inp = document.querySelector(`[data-cd-input="${CSS.escape(batch)}"]`);
+    if(inp){
+      inp.value = _cdSession[batch].count;
+      // Trigger preview update
+      onCloneDestructionInput(inp);
+    }
+  });
+}
+
+function updateSessionBar(){
+  const bar = document.getElementById('cd-session-bar');
+  const summary = document.getElementById('cd-session-summary');
+  const entries = Object.values(_cdSession);
+  // Sum session counts by "strain::batchDate" — the key for a rolling group total.
+  const perGroup = {};
+  Object.values(_cdSession).forEach(e => {
+    const k = e.strain + '::' + e.batchDate;
+    perGroup[k] = (perGroup[k] || 0) + e.count;
+  });
+  // Refresh the strain-total header line (top of each date group)
+  document.querySelectorAll('[data-cd-live-remaining]').forEach(span => {
+    const key = span.getAttribute('data-cd-live-remaining');
+    const headerRow = document.querySelector(`[data-cd-total="${CSS.escape(key)}"]`);
+    if(!headerRow){ span.innerHTML = ''; return; }
+    const base = Number(headerRow.getAttribute('data-cd-effective-base')) || 0;
+    const sessionCount = perGroup[key] || 0;
+    if(sessionCount > 0){
+      const remaining = base - sessionCount;
+      span.innerHTML = ` <span style="color:var(--amber);font-weight:600">→ ${remaining} after session</span>`;
+    } else {
+      span.innerHTML = '';
+    }
+  });
+  // Refresh the strain-rolling-total line INSIDE every batch module. Every input carries
+  // its own strain-key via data-cd-strain-key; look it up per input and paint the strain
+  // remaining below the batch-level preview. This is the per-card rolling total Devon asked
+  // for — appears on any batch card whose group has ANY session activity, even if this
+  // specific batch has 0 entered.
+  document.querySelectorAll('[data-cd-input]').forEach(input => {
+    const batch = input.getAttribute('data-cd-input');
+    const key   = input.getAttribute('data-cd-strain-key');
+    const strainLine = document.querySelector(`[data-cd-preview-strain="${CSS.escape(batch)}"]`);
+    if(!strainLine || !key) return;
+    const headerRow = document.querySelector(`[data-cd-total="${CSS.escape(key)}"]`);
+    if(!headerRow){ strainLine.innerHTML = ''; return; }
+    const base = Number(headerRow.getAttribute('data-cd-effective-base')) || 0;
+    const sessionCount = perGroup[key] || 0;
+    if(sessionCount > 0){
+      const remaining = base - sessionCount;
+      const strainName = headerRow.getAttribute('data-cd-strain') || '';
+      strainLine.innerHTML = `→ <b style="color:var(--amber)">${remaining}</b> total left for ${strainName}`;
+    } else {
+      strainLine.innerHTML = '';
+    }
+  });
+  // Then: the bottom subtotal bar
+  if(!entries.length){
+    if(bar) bar.style.display = 'none';
+    return;
+  }
+  if(bar) bar.style.display = 'block';
+  const totalClones  = entries.reduce((s,e) => s + e.count, 0);
+  const totalBatches = entries.length;
+  const totalStrains = new Set(entries.map(e => e.strain)).size;
+  if(summary){
+    summary.innerHTML = `<b>${totalClones}</b> clones · <b>${totalBatches}</b> batch${totalBatches===1?'':'es'} · <b>${totalStrains}</b> strain${totalStrains===1?'':'s'}`;
+  }
+}
+
+function clearCloneDestructionSession(){
+  if(!Object.keys(_cdSession).length) return;
+  if(!confirm('Clear the destruction session? Entered counts will be discarded — nothing has been submitted yet.')) return;
+  _cdSession = {};
+  renderCloneDestruction();
+}
+
+function reviewCloneDestructionSession(){
+  const entries = Object.values(_cdSession);
+  if(!entries.length) return;
+  // Group by strain for the review table
+  const byStrain = {};
+  Object.keys(_cdSession).forEach(batch => {
+    const e = _cdSession[batch];
+    if(!byStrain[e.strain]) byStrain[e.strain] = [];
+    byStrain[e.strain].push({batch, ...e});
+  });
+  // Compute strain totals against the CURRENT METRC state
+  const all = getActiveCloneBatches();
+  const strainTotals = {};
+  Object.keys(byStrain).forEach(strain => {
+    const strainBatches = all.filter(b => b.strain === strain);
+    // Sum only for batches in the SAME date group as the session entries for this strain.
+    // If session touches multiple dates for the same strain, we compute per-date totals below.
+  });
+  const strains = Object.keys(byStrain).sort();
+  const html = strains.map(strain => {
+    // Per-date grouping within the strain
+    const strainEntries = byStrain[strain];
+    const dates = Array.from(new Set(strainEntries.map(e => e.batchDate))).sort();
+    return `<div style="margin-bottom:18px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px">${strain}</div>
+      ${dates.map(dateKey => {
+        const dateEntries = strainEntries.filter(e => e.batchDate === dateKey);
+        // Strain-total math for this date across ALL batches (not just ones being destroyed)
+        const dateBatchesAll = all.filter(b => b.strain === strain && b.batchDate === dateKey);
+        // b.plants is effective; sum directly for current strain-date total.
+        const currentTotal = dateBatchesAll.reduce((s,b) => s + b.plants, 0);
+        const sessionDestroy = dateEntries.reduce((s,e) => s + e.count, 0);
+        const afterTotal = currentTotal - sessionDestroy;
+        return `<div style="margin-left:8px;margin-bottom:10px;padding-left:12px;border-left:2px solid var(--border)">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Batch date: <b>${dateKey}</b> · strain total ${currentTotal} → <b style="color:${afterTotal < currentTotal * 0.5 ? 'var(--red)' : 'var(--amber)'}">${afterTotal}</b></div>
+          ${dateEntries.map(e => {
+            // e.plants is the effective count (Plants column, already net of destructions).
+            // remainingInBatch = effective - session destroy.
+            const remainingInBatch = e.plants - e.count;
+            const isHighPct = e.plants > 0 && (e.count / e.plants) > 0.5;
+            return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;font-size:12px">
+              <span style="font-family:var(--mono)">${e.batch}</span>
+              <span>destroy <b>${e.count}</b> → <b style="color:var(--text)">${remainingInBatch}</b> remain${isHighPct?' <span style="color:var(--amber);font-size:10px">⚠ &gt;50% of batch</span>':''}</span>
+            </div>`;
+          }).join('')}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
+  const body = document.getElementById('cd-review-body');
+  if(body){
+    const totalClones  = entries.reduce((s,e) => s + e.count, 0);
+    const totalBatches = entries.length;
+
+    const currentName = loggedInMember ? loggedInMember.name : '';
+    body.innerHTML = `<div style="margin-bottom:14px;padding:10px 12px;background:var(--amber-bg,rgba(255,190,60,0.08));border:1px solid var(--amber-dim,var(--border2));border-radius:var(--r);font-size:12px">
+      About to destroy <b>${totalClones}</b> clones across <b>${totalBatches}</b> batch${totalBatches===1?'':'es'} in <b>${strains.length}</b> strain${strains.length===1?'':'s'}. Verify counts carefully — rows can\'t be edited once written to the sheet.
+    </div>${html}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:grid;gap:10px">
+      <div>
+        <label style="font-size:11px;color:var(--text3);font-weight:600;display:block;margin-bottom:4px">Note (optional — appears on all destruction rows)</label>
+        <input id="cd-review-note" type="text" placeholder="e.g. Not viable, weak roots, PM-affected…"
+          style="width:100%;font-size:13px;padding:8px 10px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg3);color:var(--text);box-sizing:border-box"/>
+      </div>
+      <div style="font-size:10px;color:var(--text3);line-height:1.4">
+        Reason is set to <b>Damaged</b> for all rows (per METRC requirement). Rows will be written to <b>Clone_Destructions</b> with your name (<b>${currentName || 'unknown'}</b>) and a timestamp.
+      </div>
+    </div>`;
+  }
+  // Hide the sticky session bar so it doesn't float above the modal and
+  // eat clicks on the Submit button.
+  const bar = document.getElementById('cd-session-bar');
+  if(bar) bar.style.visibility = 'hidden';
+  document.getElementById('cd-review-modal-bg').classList.add('open');
+}
+
+function closeCloneDestructionReview(){
+  document.getElementById('cd-review-modal-bg').classList.remove('open');
+  // Restore session bar visibility (was hidden while modal was open to prevent
+  // the sticky element from intercepting clicks on the modal's Submit button).
+  const bar = document.getElementById('cd-session-bar');
+  if(bar) bar.style.visibility = '';
+}
+
+// Stage 3: real submission. Writes one row per session entry to the Clone_Destructions
+// sheet via the backend. Validates approver is set and differs from entry person.
+// On success: clears the session, closes the modal, alerts summary. On failure:
+// alerts with error text but preserves session so operator can retry.
+async function submitCloneDestructionForApproval(){
+  const entries = Object.values(_cdSession);
+  if(!entries.length){
+    alert('Nothing to submit.');
+    return;
+  }
+  const currentName = (loggedInMember && loggedInMember.name) || 'Unknown';
+  const noteEl = document.getElementById('cd-review-note');
+  const note   = noteEl ? noteEl.value.trim() : '';
+
+  // Build payload — one row per batch touched in this session.
+  // Entered/Approved are both the current user (no two-person requirement).
+  const todayIso = dateToIso(TODAY);
+  const payload = {
+    action:     'submitCloneDestructions',
+    enteredBy:  currentName,
+    approvedBy: currentName,
+    note:       note,
+    entries: Object.keys(_cdSession).map(batch => {
+      const s = _cdSession[batch];
+      // "Kept from destruction" per SOP: the count remaining in the immature
+      // batch AFTER this destruction is recorded. Computed here on the frontend
+      // from what the user has just entered — avoids race conditions with
+      // METRC_immature refresh mid-submit.
+      const keptAfter = Math.max(0, (s.plants || 0) - (s.count || 0));
+      return {
+        batch:      batch,
+        count:      s.count,
+        kept:       keptAfter,
+        actualDate: todayIso,
+        strain:     s.strain,
+        batchDate:  s.batchDate,
+      };
+    }),
+  };
+
+  // Lock the submit button while in flight
+  const btn = document.getElementById('cd-submit-btn');
+  const originalBtnText = btn ? btn.textContent : 'Submit destructions';
+  const unlock = () => { if(btn){ btn.disabled = false; btn.textContent = originalBtnText; } };
+  if(btn){ btn.disabled = true; btn.textContent = 'Submitting…'; }
+
+  // Hardened fetch — AbortController with a 30s ceiling guarantees the button
+  // never hangs indefinitely if the network drops mid-request (which happened
+  // to Devon on 2026-09). The catch path always runs unlock().
+  const ctrl = new AbortController();
+  const abortTimer = setTimeout(() => ctrl.abort(), 30000);
+  try{
+    const res = await fetch(gsUrl, {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain'},
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    clearTimeout(abortTimer);
+    const result = await res.json();
+    if(!result.ok){
+      alert('Submission failed:\n\n' + (result.error || 'unknown error') + '\n\nSession preserved — fix and retry.');
+      unlock();
+      return;
+    }
+    // Success — clear session, close modal, refresh pending destructions
+    // so the batch modules immediately reflect the new counts, then alert.
+    const rowsWritten = result.rowsWritten || entries.length;
+    const totalClones = entries.reduce((s,e) => s + e.count, 0);
+    _cdSession = {};
+    closeCloneDestructionReview();
+    // Refresh in-app destructions from the sheet, then re-render.
+    // Don't await — the alert fires immediately, refresh happens in background.
+    refreshCloneDestructionPending();
+    renderCloneDestruction();
+    alert('Wrote ' + rowsWritten + ' destruction row' + (rowsWritten===1?'':'s') +
+          ' to Clone_Destructions.\n\nDestroyed: ' + totalClones + ' clones\nEntered by: ' + currentName +
+          '\n\nCopy A:G from that sheet to your METRC upload template.');
+  }catch(e){
+    clearTimeout(abortTimer);
+    const msg = (e && e.name === 'AbortError')
+      ? 'Submission timed out after 30 seconds. Check your connection and retry — session is preserved.'
+      : 'Submission failed: ' + String(e) + '\n\nSession preserved — check connection and retry.';
+    alert(msg);
+    unlock();
+  }
 }
 
 function openModal(roomId,taskId,taskName){
@@ -4853,10 +5660,12 @@ function skipTask(roomId,taskId){
 function renderTodayLog(){
   const list=document.getElementById('today-log-list');
   const summary=document.getElementById('log-summary');
-  const done=todayLog.filter(e=>e.status==='done').length;
-  summary.innerHTML=`<span style="color:var(--green)">${done} completed</span><span style="color:var(--text3);margin-left:10px">${todayLog.length} total entries today</span>`;
-  if(!todayLog.length){list.innerHTML=`<div class="empty-state">No tasks logged yet today.</div>`;return;}
-  list.innerHTML=[...todayLog].reverse().map(e=>`
+  // Hide soft-deleted (tombstoned) entries from the log view and counts.
+  const visLog=todayLog.filter(e=>!e.deleted);
+  const done=visLog.filter(e=>e.status==='done').length;
+  summary.innerHTML=`<span style="color:var(--green)">${done} completed</span><span style="color:var(--text3);margin-left:10px">${visLog.length} total entries today</span>`;
+  if(!visLog.length){list.innerHTML=`<div class="empty-state">No tasks logged yet today.</div>`;return;}
+  list.innerHTML=[...visLog].reverse().map(e=>`
     <div class="log-entry">
       <div class="log-status" style="background:${e.status==='done'?'var(--green)':'var(--text3)'}"></div>
       <div class="log-info">
@@ -4875,7 +5684,7 @@ function clearTodayLog(){todayLog=[];S('wg_log_'+dateToIso(TODAY),todayLog);rend
 function renderAdditiveTable(){
   const tbody=document.getElementById('additive-tbody');
   tbody.innerHTML='';
-  const phases={1:'Week 1',8:'Week 2',15:'Week 3',22:'Week 4',29:'Week 5',36:'Week 6',43:'Week 7',50:'X1 phase',57:'Late flower'};
+  const phases={1:'F1 Foundation',5:'F2',10:'F3',15:'E1 Expansion',19:'E2',23:'E3',26:'E4 Pre-Stack',29:'S1 · Peak Entry',36:'S2 · True Peak',43:'S3 · Peak HOLD',50:'S4 · FILL HOLD',57:'S5 · Fill-Hold Close',61:'Landing (L1–L3)'};
   for(let d=1;d<=CYCLE;d++){
     const ad=ADDITIVES[d]||null;
     const fd=rooms.map(r=>flowerDay(r)).find(fd=>fd===d);
@@ -4892,7 +5701,7 @@ function renderAdditiveTable(){
       <td>${ad?`<span class="add-pill ${ad.pill}">${ad.name}</span>`:`<span class="add-pill pill-base">Base feed only</span>`}</td>
       <td style="font-family:var(--mono);font-size:12px">${ad?.dose||'—'}</td>
       <td>${ad?.tier2?`<span class="tag tag-amber" style="font-size:9px">#flower-rooms</span>`:d<65?`<span class="tag tag-blue" style="font-size:9px">#daily-dispatch</span>`:''}</td>
-      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d>=60&&d<=63?'Pre-harvest defol window':d>=64&&d<=65?'X3 landing zone':d===CYCLE?'CHOP DAY — Day 66 morning':''}</td>
+      <td style="font-size:11px;color:var(--text3)">${d===28?'<span style="color:var(--red)">Hard cutoff defol</span>':d===46?'<span style="color:var(--amber)">Final amino day</span>':d===50?'<span style="color:var(--green)">Fill Hold opens — engine ON</span>':d===60?'<span style="color:var(--blue)">Fill window closes (SLF-100)</span>':d===61?'Landing L1 — fade begins':d===63?'Landing L2':d===65?'Landing L3 — finish floor':d===CYCLE?'<span style="color:var(--red)">CHOP DAY — Day 66 AM peak milky</span>':''}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -5776,10 +6585,55 @@ const DEFAULT_TEAM=[
 // ── VERSION CHECK: runs first, clears stale localStorage before anything initializes
 const _storedVersion = L('wg_app_version','0');
 if(_storedVersion !== APP_VERSION) {
-  // Preserve room config and settings, wipe everything else
-  const _keepKeys = ['wg_rooms_v2','wg_webhooks'];
+  // Preserve user-authored data + timestamp tiebreakers when APP_VERSION bumps.
+  // Anything NOT in this list gets wiped from localStorage on version change,
+  // and then re-read a moment later as its empty default. If a push fires
+  // during the ~800ms window before the cloud pull completes, the empty
+  // default gets pushed to cloud — permanently destroying the data for
+  // everyone.
+  // ── wg_rooms_v2, wg_webhooks:       user-set room configs and Slack webhook URLs
+  // ── wg_rooms_edited_at, wg_team_edited_at: last-edit timestamps that the config
+  //    pull merge uses to decide when local is newer than cloud. If these get
+  //    wiped, the tiebreaker defaults to 0 and cloud always wins on the next
+  //    pull — including cases where cloud has stale data from a failed silent
+  //    push, silently reverting the user's launch/flip dates.
+  // ── wg_team, wg_team_deleted: same class — if wiped, DEFAULT_TEAM gets pushed
+  //    to cloud during the initial-load window, overwriting the current roster.
+  // ── wg_dry_rooms, wg_approved_takedowns: dry room takedown submissions and
+  //    approvals. Wipe here means the version-bumped device pushes an empty
+  //    object to the sheet-backed cloud storage, which clears the approvals
+  //    for ALL devices on their next pull — so approved harvests reappear.
+  // ── wg_trim_queue, wg_trim_queue_deleted: trim queue state + deletion
+  //    tombstones. Wipe cascades the same way: empty local trimQueue gets
+  //    pushed to cloud, then METRC auto-populate re-adds every harvest that
+  //    was previously archived or deleted. Tombstones prevent auto-add from
+  //    resurrecting explicitly-deleted items across devices.
+  const _keepKeys = [
+    'wg_rooms_v2', 'wg_webhooks',
+    'wg_rooms_edited_at', 'wg_team_edited_at',
+    'wg_team', 'wg_team_deleted',
+    'wg_dry_rooms', 'wg_approved_takedowns',
+    'wg_trim_queue', 'wg_trim_queue_deleted',
+    'wg_room_health',
+    // ── wg_ipm_log: IPM/rule completion log. Previously missing from keep-keys,
+    //    causing rule-generated tasks (Superthrive, Milstop, etc.) to reappear
+    //    as "1 day overdue" after a version bump because the local completion
+    //    record was wiped. Cloud still has the data via union merge, but the
+    //    push uses no-cors so some entries can silently fail to reach the
+    //    cloud — losing the local copy means losing the completion entirely.
+    'wg_ipm_log',
+  ];
   const _keepData = {};
   _keepKeys.forEach(k=>{ const v=localStorage.getItem(k); if(v) _keepData[k]=v; });
+  // Also preserve all daily chore logs (wg_log_YYYY-MM-DD) which have the
+  // same data-loss risk — chore completions wiped on version bump reappear
+  // as pending the next day.
+  for(let i=0; i<localStorage.length; i++){
+    const k = localStorage.key(i);
+    if(k && k.indexOf('wg_log_') === 0){
+      _keepData[k] = localStorage.getItem(k);
+    }
+  }
   localStorage.clear();
   Object.entries(_keepData).forEach(([k,v])=>localStorage.setItem(k,v));
   S('wg_app_version', APP_VERSION);
@@ -6257,6 +7111,12 @@ function renderSettings(){
 // POST PRODUCTION
 // ══════════════════════════════════════════════
 let trimQueue=L('wg_trim_queue',[]);
+// Deletion tombstones — IDs of trim queue items that have been explicitly
+// removed. METRC auto-populate consults this list so it doesn't resurrect
+// deleted items on every harvest re-upload. Union-merged with cloud on pull
+// (same pattern as _deletedTeamNames), pushed only when the trim queue is
+// dirty.
+let _deletedTrimIds=L('wg_trim_queue_deleted',[]);
 let trimWeights=L('wg_trim_weights',{});
 
 function openAddTrimItem(editId){
@@ -6337,6 +7197,12 @@ function markTrimInProgress(id){
 }
 function removeTrimItem(id){
   trimQueue=trimQueue.filter(i=>i.id!==id);
+  // Add to tombstone list so METRC auto-populate doesn't re-add it, and so
+  // other devices pulling config know this ID is intentionally deleted.
+  if(_deletedTrimIds.indexOf(id)<0){
+    _deletedTrimIds.push(id);
+    S('wg_trim_queue_deleted',_deletedTrimIds);
+  }
   S('wg_trim_queue',trimQueue);
   sessionStorage.setItem('wg_trim_queue_dirty','1');
   pushConfigToCloud(true);
@@ -7496,11 +8362,23 @@ function renderChores(){
 }
 
 // ══════════════════════════════════════════════
-// MAXX OS v1.5 PHASES + EC RAINBOW v1.3.2 + GROWLINK BLUEPRINTS
+// MAXX OS v1.6 PEAK "FORTRESS FINISH" (HYBRID) + EC RAINBOW v1.3.2 + GROWLINK BLUEPRINTS
 // ══════════════════════════════════════════════
-// Maxx OS v1.5 — full Growlink blueprint setpoints (May 7, 2026)
-// Changes vs v1.4: F1/F2 softer entry · X1/X2A/X2B revised ripening cascade ·
-// X3 shortened to 64-66 (3 days) · X4 removed · chop Day 66 morning.
+// Maxx v1.6 Peak — Fortress Finish (2026-07-30 revision).
+// Front + mid (F1–S3, D1–49): unchanged from stock v1.6 Peak. VPD values now
+// pinned to specific day/night targets from the Entry Sheet rather than loose
+// ranges (vpdMin=nightVPD target, vpdMax=dayVPD target — alertThresholds
+// T1/T2 spread provides the acceptable band around each).
+// Back-half REBUILT for bud-rot protection:
+//   · FH1 split into FH1a (D50-53) and FH1b (D54-56) for finer control
+//   · Temp steps down (79→78→77→76→74→72°F day) to keep VPD in the 1.5–1.6
+//     Fortress band as RH drops. Temperature is the trim, VPD is the anchor.
+//   · RH drops aggressively (54→53→51→49→47→45→44%) — night RH always < day RH
+//     so leaf-to-dew-point margin widens 15°→20° through the finish.
+//   · Day/night temp swing tightens through the finish (smaller lights-off
+//     humidity surge exactly when buds are densest).
+// HVAC HARD FLOOR: 70°F / 50% RH. Fortress Finish lands 4°F above floor.
+// Harvest: D65 preferred, D66 ceiling.
 // EC ranges per phase reflect v1.3.2 daily-ramp endpoints (use ecForDay() for
 // today's exact target — phase ranges shown as background context).
 // nightRH = separate night RH target; vpdMin/Max = VPD range; vwcMin/Max = substrate moisture range
@@ -7508,20 +8386,25 @@ function renderChores(){
 const MAXX_PHASES=[
   // Vegetative phase — used for unflipped rooms
   {id:'VEG', name:'Vegetative', start:null, end:null, light:50, co2:900, dayTemp:83, nightTemp:79, rh:70, nightRH:75, ecMin:null, ecMax:null, vpdMin:null, vpdMax:null, vwcMin:null, vwcMax:null, subECMin:null, subECMax:null, dryback:null, shotNote:'Veg phase. Maintain canopy, prep for flip.'},
-  {id:'F1', name:'F1 Foundation',   start:1,  end:4,  light:50, co2:800,  dayTemp:78, nightTemp:76, rh:78, nightRH:77, ecMin:2.0, ecMax:2.1, vpdMin:0.8, vpdMax:1.1, vwcMin:65, vwcMax:80, subECMin:2.5, subECMax:3.5, dryback:5,  shotNote:'v1.5 softer entry. Small frequent shots. Build root zone.'},
-  {id:'F2', name:'F2 Foundation',   start:5,  end:9,  light:70, co2:1050, dayTemp:80, nightTemp:74, rh:75, nightRH:74, ecMin:2.1, ecMax:2.4, vpdMin:0.9, vpdMax:1.2, vwcMin:65, vwcMax:78, subECMin:2.5, subECMax:3.5, dryback:6,  shotNote:'Mid-step ramp. 4-6 shots/day. Watch for stretch.'},
-  {id:'F3', name:'F3 Foundation',   start:10, end:14, light:90, co2:1150, dayTemp:80, nightTemp:74, rh:73, nightRH:73, ecMin:2.2, ecMax:2.4, vpdMin:1.0, vpdMax:1.3, vwcMin:63, vwcMax:75, subECMin:2.8, subECMax:3.8, dryback:7,  shotNote:'Begin structured dryback. First shot 1-2h after lights on.'},
-  {id:'E1', name:'E1 Expansion',    start:15, end:18, light:100,co2:1250, dayTemp:80, nightTemp:73, rh:70, nightRH:70, ecMin:2.4, ecMax:2.5, vpdMin:1.0, vpdMax:1.4, vwcMin:62, vwcMax:75, subECMin:3.0, subECMax:4.0, dryback:8,  shotNote:'Plants expanding fast. Match irrigation to transpiration.'},
-  {id:'E2', name:'E2 Expansion',    start:19, end:22, light:100,co2:1300, dayTemp:80, nightTemp:73, rh:68, nightRH:68, ecMin:2.5, ecMax:2.6, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.0, subECMax:4.2, dryback:9,  shotNote:'High transpiration. Runoff EC 3.0–4.5 target.'},
-  {id:'E3', name:'E3 Expansion',    start:23, end:25, light:100,co2:1350, dayTemp:80, nightTemp:73, rh:66, nightRH:66, ecMin:2.6, ecMax:2.7, vpdMin:1.1, vpdMax:1.5, vwcMin:60, vwcMax:73, subECMin:3.2, subECMax:4.5, dryback:9,  shotNote:'Approach peak veg mass. Maintain runoff 15–20%.'},
-  {id:'E4', name:'E4 Pre-Stack',    start:26, end:28, light:100,co2:1400, dayTemp:80, nightTemp:73, rh:64, nightRH:64, ecMin:2.7, ecMax:2.8, vpdMin:1.1, vpdMax:1.5, vwcMin:58, vwcMax:72, subECMin:3.2, subECMax:4.5, dryback:10, shotNote:'Crown formation push. Tighten dryback. Hard cutoff defol Day 28.'},
-  {id:'S1', name:'S1 Stack',        start:29, end:35, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:58, nightRH:58, ecMin:2.8, ecMax:3.0, vpdMin:1.2, vpdMax:1.6, vwcMin:55, vwcMax:70, subECMin:3.5, subECMax:4.8, dryback:10, shotNote:'Peak entry. Push EC steadily. Supa Stiky Day 29.'},
-  {id:'S2', name:'S2 True Peak',    start:36, end:42, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:56, nightRH:56, ecMin:3.0, ecMax:3.1, vpdMin:1.2, vpdMax:1.6, vwcMin:53, vwcMax:68, subECMin:3.8, subECMax:5.2, dryback:11, shotNote:'TRUE PEAK. *3.1 only earned if dryback uniformity, runoff trend, leaf integrity all hold. Spray window closes Day 42.'},
-  {id:'S3', name:'S3 Peak Hold',    start:43, end:49, light:100,co2:1350, dayTemp:80, nightTemp:72, rh:55, nightRH:55, ecMin:2.7, ecMax:3.1, vpdMin:1.2, vpdMax:1.6, vwcMin:52, vwcMax:67, subECMin:3.5, subECMax:5.0, dryback:11, shotNote:'Steeper descent. Hold peak briefly then ramp down. Round 2 defol opens Day 42.'},
-  {id:'X1', name:'X1 Ripening Trigger', start:50, end:56, light:75, co2:900, dayTemp:75, nightTemp:67, rh:48, nightRH:47, ecMin:1.4, ecMax:2.0, vpdMin:1.0, vpdMax:1.4, vwcMin:50, vwcMax:65, subECMin:3.0, subECMax:4.5, dryback:12, shotNote:'v1.5 ripening trigger. EC cliff 2.7→2.0. NO H₂O₂. Pull all additives, base only. Reduce shot frequency.'},
-  {id:'X2A',name:'X2A Cascade',     start:57, end:60, light:60, co2:800,  dayTemp:74, nightTemp:65, rh:44, nightRH:43, ecMin:1.2, ecMax:1.4, vpdMin:1.0, vpdMax:1.4, vwcMin:48, vwcMax:62, subECMin:2.0, subECMax:3.5, dryback:13, shotNote:'Cascade engages. Active fade. Push dryback. 3–4 shots/day.'},
-  {id:'X2B',name:'X2B Maturation',  start:61, end:63, light:50, co2:700,  dayTemp:72, nightTemp:64, rh:42, nightRH:41, ecMin:1.0, ecMax:1.2, vpdMin:0.9, vpdMax:1.3, vwcMin:45, vwcMax:60, subECMin:1.5, subECMax:2.5, dryback:15, shotNote:'Active ripening. Resin-friendly. Pre-harvest defol Day 60–63. Minimal water.'},
-  {id:'X3', name:'X3 Landing Zone', start:64, end:66, light:40, co2:500,  dayTemp:68, nightTemp:63, rh:40, nightRH:39, ecMin:0.8, ecMax:1.0, vpdMin:null,vpdMax:null, vwcMin:35, vwcMax:50, subECMin:null,subECMax:null, dryback:null, shotNote:'Final ripening. Cool finish preserves terpenes. CHOP DAY 66 MORNING.'},
+  {id:'F1', name:'F1 Foundation',   start:1,  end:4,  light:50, co2:950,  dayTemp:78, nightTemp:76, rh:78, nightRH:77, ecMin:2.0, ecMax:2.1, vpdMin:0.70, vpdMax:0.72, vwcMin:65, vwcMax:80, subECMin:2.5, subECMax:3.5, dryback:5,  shotNote:'v1.6 softer entry. Small frequent shots. Build root zone. Day VPD 0.72, night 0.70.'},
+  {id:'F2', name:'F2 Foundation',   start:5,  end:9,  light:70, co2:1050, dayTemp:80, nightTemp:74, rh:75, nightRH:74, ecMin:2.1, ecMax:2.4, vpdMin:0.75, vpdMax:0.87, vwcMin:65, vwcMax:78, subECMin:2.5, subECMax:3.5, dryback:6,  shotNote:'Mid-step ramp. 4-6 shots/day. Day VPD 0.87, night 0.75. Watch for stretch.'},
+  {id:'F3', name:'F3 Foundation',   start:10, end:14, light:90, co2:1150, dayTemp:80, nightTemp:74, rh:73, nightRH:73, ecMin:2.2, ecMax:2.4, vpdMin:0.77, vpdMax:0.94, vwcMin:63, vwcMax:75, subECMin:2.8, subECMax:3.8, dryback:7,  shotNote:'Begin structured dryback. Day VPD 0.94, night 0.77. First shot 1-2h after lights on.'},
+  {id:'E1', name:'E1 Expansion',    start:15, end:18, light:100,co2:1250, dayTemp:80, nightTemp:73, rh:72, nightRH:70, ecMin:2.4, ecMax:2.5, vpdMin:0.83, vpdMax:0.98, vwcMin:62, vwcMax:75, subECMin:3.0, subECMax:4.0, dryback:8,  shotNote:'Plants expanding fast. Day VPD 0.98, night 0.83. Match irrigation to transpiration.'},
+  {id:'E2', name:'E2 Expansion',    start:19, end:22, light:100,co2:1300, dayTemp:80, nightTemp:73, rh:70, nightRH:70, ecMin:2.5, ecMax:2.6, vpdMin:0.83, vpdMax:1.05, vwcMin:60, vwcMax:73, subECMin:3.0, subECMax:4.2, dryback:9,  shotNote:'High transpiration. Day VPD 1.05, night 0.83. Runoff EC 3.0–4.5 target.'},
+  {id:'E3', name:'E3 Expansion',    start:23, end:25, light:100,co2:1350, dayTemp:80, nightTemp:73, rh:68, nightRH:68, ecMin:2.6, ecMax:2.7, vpdMin:0.89, vpdMax:1.12, vwcMin:60, vwcMax:73, subECMin:3.2, subECMax:4.5, dryback:9,  shotNote:'Approach peak veg mass. Day VPD 1.12, night 0.89. Maintain runoff 15–20%.'},
+  {id:'E4', name:'E4 Pre-Stack',    start:26, end:28, light:100,co2:1400, dayTemp:80, nightTemp:73, rh:66, nightRH:64, ecMin:2.7, ecMax:2.8, vpdMin:1.00, vpdMax:1.19, vwcMin:58, vwcMax:72, subECMin:3.2, subECMax:4.5, dryback:10, shotNote:'Crown formation push. Day VPD 1.19, night 1.00. Tighten dryback. Hard cutoff defol Day 28.'},
+  {id:'S1', name:'S1 Stack',        start:29, end:35, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:58, nightRH:58, ecMin:2.8, ecMax:3.0, vpdMin:1.13, vpdMax:1.47, vwcMin:55, vwcMax:70, subECMin:3.5, subECMax:4.8, dryback:10, shotNote:'Peak entry. Push EC steadily. Day VPD 1.47, night 1.13. Supa Stiky Day 29.'},
+  {id:'S2', name:'S2 True Peak',    start:36, end:42, light:100,co2:1400, dayTemp:80, nightTemp:72, rh:56, nightRH:56, ecMin:3.0, ecMax:3.1, vpdMin:1.18, vpdMax:1.54, vwcMin:53, vwcMax:68, subECMin:3.8, subECMax:5.2, dryback:11, shotNote:'TRUE PEAK. Day VPD 1.54, night 1.18. *3.1 only earned if dryback uniformity, runoff trend, leaf integrity all hold. Spray window closes Day 42.'},
+  {id:'S3', name:'S3 Peak Hold',    start:43, end:49, light:100,co2:1350, dayTemp:80, nightTemp:72, rh:55, nightRH:55, ecMin:2.7, ecMax:3.1, vpdMin:1.21, vpdMax:1.57, vwcMin:52, vwcMax:67, subECMin:3.5, subECMax:5.0, dryback:11, shotNote:'Peak hold. Day VPD 1.57, night 1.21. Round 2 defol opens Day 42. Fortress Finish begins Day 50.'},
+  // ── FORTRESS FINISH — rebuilt back end (2026-07-30). VPD is the anchor,
+  //    temp is the trim. Every step ratchets RH down and drops temp to keep
+  //    VPD in the 1.5–1.6 kPa fortress band. Night RH < day RH throughout.
+  {id:'FH1a',name:'FH1a Fortress Entry',start:50, end:53, light:100, co2:1350, dayTemp:79, nightTemp:72, rh:53, nightRH:52, ecMin:2.9, ecMax:2.9, vpdMin:1.29, vpdMax:1.59, vwcMin:55, vwcMax:65, subECMin:3.5, subECMax:4.2, dryback:15, shotNote:'Fortress opens. Engine ON, feed 2.9. Day VPD 1.59, night 1.29. Pre-stage the dehu before the 10 AM–2 PM transpiration peak.'},
+  {id:'FH1b',name:'FH1b Fortress Hold', start:54, end:56, light:100, co2:1350, dayTemp:78, nightTemp:72, rh:51, nightRH:50, ecMin:2.9, ecMax:2.9, vpdMin:1.34, vpdMax:1.60, vwcMin:55, vwcMax:65, subECMin:3.5, subECMax:4.2, dryback:15, shotNote:'RH steps down again. Day VPD 1.60, night 1.34. Watch dew-point spread — if leaf-to-DP margin drops below 8°F any night, condensation alarm regardless of RH number.'},
+  {id:'FH2', name:'FH2 Fill Close',     start:57, end:60, light:95,  co2:1300, dayTemp:77, nightTemp:71, rh:49, nightRH:47, ecMin:2.8, ecMax:2.9, vpdMin:1.37, vpdMax:1.62, vwcMin:55, vwcMax:65, subECMin:3.5, subECMax:4.2, dryback:15, shotNote:'Day VPD 1.62, night 1.37. D60 SLF-100 2.0 ml/gal — FILL WINDOW CLOSE (salt clearance AFTER heads fill).'},
+  {id:'L1',  name:'L1 Landing',         start:61, end:62, light:75,  co2:1150, dayTemp:76, nightTemp:71, rh:47, nightRH:45, ecMin:2.3, ecMax:2.6, vpdMin:1.42, vpdMax:1.62, vwcMin:50, vwcMax:60, subECMin:2.5, subECMax:3.8, dryback:12, shotNote:'Compressed fade begins. Day VPD 1.62, night 1.42. Base / plain only. Re-index blueprint to actual trigger day — never re-apply Maxx Peak on the calendar day.'},
+  {id:'L2',  name:'L2 Landing',         start:63, end:64, light:65,  co2:800,  dayTemp:74, nightTemp:70, rh:45, nightRH:44, ecMin:1.6, ecMax:2.0, vpdMin:1.40, vpdMax:1.58, vwcMin:45, vwcMax:55, subECMin:2.0, subECMax:3.0, dryback:12, shotNote:'Senescence cues. Day VPD 1.58, night 1.40. Light 65%, CO₂ 800.'},
+  {id:'L3',  name:'L3 Finish Floor',    start:65, end:66, light:40,  co2:600,  dayTemp:72, nightTemp:69, rh:44, nightRH:43, ecMin:1.0, ecMax:1.3, vpdMin:1.38, vpdMax:1.50, vwcMin:40, vwcMax:50, subECMin:null,subECMax:null, dryback:null, shotNote:'Finish floor. Day VPD 1.50, night 1.38. HARVEST D65 preferred, D66 ceiling. Fortress-dry room protects even slow cultivars.'},
 ];
 function getPhaseForDay(fd){return MAXX_PHASES.find(p=>fd>=p.start&&fd<=p.end)||null;}
 
@@ -8081,6 +8964,11 @@ let metrcHarvestPriority=L(METRC_KEYS.harvestPriority,{});
 // ── GROWLINK LIVE DATA ──────────────────────────────────────────
 // Keyed by Growlink room name, populated by pullGrowlinkFromCloud()
 let growlinkData = L('wg_growlink_rooms', {});
+// Room health summaries — Fortress Finish monitoring. Keys are room display
+// names (e.g. "Room 5"). Each value is an object with per-parameter day/night
+// out-of-band details, computed on the backend from GL_History and cached
+// there for 15 min. Pulled alongside growlinkData every time we refresh.
+let roomHealthData = L('wg_room_health', {});
 let dryRooms = L('wg_dry_rooms', {'Dry Room 1':{note:'',order:[],takedowns:{}},'Dry Room 2':{note:'',order:[],takedowns:{}}});
 // Permanent approved takedowns — keyed "dryKey|roomTag|harvestDate"
 // Survives METRC re-uploads; once approved the harvest never reappears on the dry room card
@@ -8119,10 +9007,76 @@ async function pullGrowlinkFromCloud(silent=false){
     setTimeout(()=>{try{renderSupportRooms();}catch(e){}},0);
     // Update 24h dryback averages from GL_History if available
     setTimeout(()=>{try{updateDryback24h();}catch(e){}},200);
+    // Pull room health summaries (Fortress Finish monitoring) in the background
+    setTimeout(()=>{try{pullRoomHealthFromCloud(true);}catch(e){}},300);
     // Pre-fetch performance scores in background (leads only) so modal opens instantly
     // setTimeout(()=>{try{prefetchPerfScores();}catch(e){}},500); // Performance scores hidden — re-enable when scoring is refined
 
   }catch(e){ if(!silent) console.warn('Growlink pull failed:',e); }
+}
+
+// ── ROOM HEALTH ─────────────────────────────────────────────────────────
+// Fetch the precomputed room health summaries from the backend. The heavy
+// GL_History walk happens server-side inside growlinkLiveRefresh (every 10
+// min). We just read a small JSON payload and cache it locally.
+async function pullRoomHealthFromCloud(silent=false){
+  if(!gsUrl) return;
+  try{
+    const res=await fetchWithTimeout(gsUrl+'?action=getRoomHealth&t='+Date.now(), null, 15000);
+    const json=await res.json();
+    if(!json||!json.ok||!json.summaries) return;
+    roomHealthData=json.summaries;
+    S('wg_room_health', roomHealthData);
+    if(!silent) console.log('Room health pulled:', Object.keys(roomHealthData).length, 'rooms');
+    renderRooms();
+  }catch(e){ if(!silent) console.warn('Room health pull failed:', e); }
+}
+
+// Compact one-line renderer for a single (parameter, shift) out-of-band entry.
+// param: 'temp'|'rh'|'vpd'|'dp'   shift: 'day'|'night'
+function renderHealthLine(param, shift, entry){
+  if(!entry) return '';
+  const paramLabel = param==='temp'?'Temp':param==='rh'?'RH':param==='vpd'?'VPD':'DP spread';
+  const unit = param==='temp'?'°F':param==='rh'?'%':param==='vpd'?'kPa':'°F';
+  const sign = entry.delta>0?'+':'';
+  const shiftLabel = shift==='day'?'day':'night';
+  return `<div style="display:flex;align-items:baseline;gap:6px;font-size:11px;line-height:1.4">
+    <span style="color:var(--amber);font-weight:700">⚠</span>
+    <span style="font-weight:600">${paramLabel} avg ${entry.avg}${unit}</span>
+    <span style="color:var(--text3)">·</span>
+    <span style="color:var(--amber)">${sign}${entry.delta}${unit} ${shift==='day'?'above':'off'} ${shiftLabel} target</span>
+    <span style="color:var(--text3)">·</span>
+    <span style="color:var(--text3)">since ${entry.outSinceLabel}</span>
+  </div>`;
+}
+
+function renderHealthBannerHTML(roomName){
+  const summary = roomHealthData && roomHealthData[roomName];
+  if(!summary || !summary.parameters) return '';
+  const P = summary.parameters;
+  const lines = [];
+  // Stack in a consistent order: temp → RH → VPD → DP spread. Day first, then night.
+  const order = ['temp','rh','vpd','dp'];
+  for(const param of order){
+    for(const shift of ['day','night']){
+      const entry = P[param] && P[param][shift];
+      if(entry) lines.push(renderHealthLine(param, shift, entry));
+    }
+  }
+  // Absolute DP floor violations (nights where DP spread went under 8°F)
+  if(P.dp && P.dp.floorViolationNights > 0){
+    lines.push(`<div style="display:flex;align-items:baseline;gap:6px;font-size:11px;line-height:1.4">
+      <span style="color:var(--red);font-weight:700">■</span>
+      <span style="font-weight:600;color:var(--red)">DP spread under 8°F floor</span>
+      <span style="color:var(--text3)">·</span>
+      <span>${P.dp.floorViolationNights} night${P.dp.floorViolationNights===1?'':'s'} in last 7 days</span>
+    </div>`);
+  }
+  if(!lines.length) return '';
+  return `<div style="margin-bottom:10px;padding:8px 10px;background:var(--amber-bg,rgba(255,190,60,0.06));border:1px solid var(--amber,#f0b429);border-left:3px solid var(--amber,#f0b429);border-radius:var(--r);display:grid;gap:3px">
+    <div style="font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--amber);margin-bottom:2px">Out of range · past 7 days</div>
+    ${lines.join('')}
+  </div>`;
 }
 
 // Pre-fetch all room performance scores into localStorage cache
@@ -8141,7 +9095,10 @@ async function prefetchPerfScores(){
 async function updateDryback24h(){
   if(!gsUrl) return;
   try{
-    const res = await fetch(gsUrl+'?action=getSheet&sheet=GL_History&t='+Date.now());
+    // Only the last 24h is used below — send `since` so the backend ships a
+    // bounded tail instead of the whole (tens-of-thousands-of-rows) sheet.
+    const _since24 = new Date(Date.now() - 24*60*60*1000).toISOString();
+    const res = await fetch(gsUrl+'?action=getSheet&sheet=GL_History&since='+encodeURIComponent(_since24)+'&t='+Date.now());
     const json = await res.json();
     if(!json.ok || !json.rows || json.rows.length < 2) return;
     const rows = json.rows;
@@ -8342,8 +9299,12 @@ function syncHarvestsToTrimQueue(rows){
     const date = rawDate || dateFromBatch;
     if(!batch) return;
     if(trimQueue.find(q=>q.harvestBatch===batch)) return;
+    // Compute the ID we'd use for this batch, then skip if it's tombstoned.
+    // Deletion is intentional and permanent — don't resurrect on next METRC pull.
+    const _prospectiveId = 'tq_'+batch.replace(/[^a-z0-9]/gi,'_');
+    if(_deletedTrimIds.indexOf(_prospectiveId)>=0) return;
     const item = {
-      id: 'tq_'+batch.replace(/[^a-z0-9]/gi,'_'),
+      id: _prospectiveId,
       strain: batch,
       harvestBatch: batch,
       harvestDate: date,
@@ -9152,13 +10113,16 @@ function approveDryTakedown(dryKey, roomTag){
   if(dryRooms[dryKey]?.order){
     dryRooms[dryKey].order=dryRooms[dryKey].order.filter(t=>t!==roomTag);
   }
-  // Permanently record this approval so it survives METRC re-uploads
-  // Key includes harvest date so a future harvest from the same room isn't blocked
+  // Permanently record this approval so it survives METRC re-uploads and
+  // dry-room moves. Write BOTH the new any-dry-room key format AND the
+  // legacy dry-room-prefixed format — so rollback to an older client
+  // version still sees the approval. Both keys point to the same record.
   const _batchesForApproval = getDryRoomBatches(dryKey);
   const _matchedGroup = _batchesForApproval.find(b => (b.roomTag||'') === roomTag);
   const _harvestDate = _matchedGroup ? (_matchedGroup.harvestDate||'unknown') : 'unknown';
-  const _permKey = dryKey + '|' + roomTag + '|' + _harvestDate;
-  approvedTakedowns[_permKey] = {approvedBy:who, approvedAt:fmtTime(), date:dateToIso(TODAY)};
+  const _record = {approvedBy:who, approvedAt:fmtTime(), date:dateToIso(TODAY), harvestDate:_harvestDate};
+  approvedTakedowns[roomTag + '|' + _harvestDate] = _record;                 // new any-dry-room key
+  approvedTakedowns[dryKey + '|' + roomTag + '|' + _harvestDate] = _record;  // legacy key, backward compat
   S('wg_approved_takedowns', approvedTakedowns);
   S('wg_dry_rooms',dryRooms);
   pushConfigToCloud(true);
@@ -9170,6 +10134,48 @@ function approveDryTakedown(dryKey, roomTag){
     taskName:'Dry takedown — '+dryKey+' Room '+roomTag.replace(/[^0-9]/g,''),
     who,notes:'Submitted by '+td.submittedBy,pct:'',time:fmtTime(),status:'done'});
   S('wg_log_'+dateToIso(TODAY),todayLog);
+  renderTodayLog();
+  renderSupportRooms();
+}
+
+// Lead-only one-click "Mark done" — combines submit + approve in one step.
+// Skips the dual-signoff requirement because a lead is trusted to certify
+// both. Behaves identically to approveDryTakedown otherwise (writes the
+// approval keys, logs to sheet, updates today's log, re-renders).
+function markDryTakedownDone(dryKey, roomTag){
+  if(!loggedInMember || loggedInMember.role !== 'lead') return;
+  const who = loggedInMember.name;
+  if(!dryRooms[dryKey]) dryRooms[dryKey]={note:'',order:[],takedowns:{}};
+  if(!dryRooms[dryKey].takedowns) dryRooms[dryKey].takedowns={};
+  const tdKey = dryKey + '|' + roomTag;
+  // Create the record already approved.
+  dryRooms[dryKey].takedowns[tdKey] = {
+    dryKey, roomTag,
+    submittedBy: who,   submittedAt: fmtTime(),
+    approved: true,     approvedBy: who,        approvedAt: fmtTime(),
+    leadMarked: true,   // audit tag — this bypassed dual signoff
+  };
+  // Remove room from order list
+  if(dryRooms[dryKey]?.order){
+    dryRooms[dryKey].order = dryRooms[dryKey].order.filter(t => t !== roomTag);
+  }
+  // Permanently record approval — both key formats (see approveDryTakedown for rationale)
+  const _batchesForApproval = getDryRoomBatches(dryKey);
+  const _matchedGroup = _batchesForApproval.find(b => (b.roomTag||'') === roomTag);
+  const _harvestDate = _matchedGroup ? (_matchedGroup.harvestDate||'unknown') : 'unknown';
+  const _record = {approvedBy:who, approvedAt:fmtTime(), date:dateToIso(TODAY), harvestDate:_harvestDate, leadMarked:true};
+  approvedTakedowns[roomTag + '|' + _harvestDate] = _record;
+  approvedTakedowns[dryKey + '|' + roomTag + '|' + _harvestDate] = _record;
+  S('wg_approved_takedowns', approvedTakedowns);
+  S('wg_dry_rooms', dryRooms);
+  S('wg_rooms_edited_at', Date.now());
+  pushConfigToCloud(true);
+  // Log to sheet — mark as lead-completed so audit trail shows single signoff
+  postToSheet('Dry_Takedowns', [dateToIso(TODAY), fmtTime(), dryKey, roomTag, who, who + ' (lead)']);
+  todayLog.push({id:Date.now(), roomId:dryKey, taskId:'dry_takedown',
+    taskName:'Dry takedown — ' + dryKey + ' Room ' + roomTag.replace(/[^0-9]/g,'') + ' (lead-marked)',
+    who, notes:'Lead one-click', pct:'', time:fmtTime(), status:'done'});
+  S('wg_log_' + dateToIso(TODAY), todayLog);
   renderTodayLog();
   renderSupportRooms();
 }
@@ -9212,11 +10218,79 @@ function getDryRoomBatches(dryKey){
     seen[batch].plants += plants;
   });
 
-  // Filter out permanently approved takedowns so they never reappear after METRC re-upload
-  return Object.values(seen).filter(b => {
-    const permKey = dryKey + '|' + (b.roomTag||'') + '|' + (b.harvestDate||'unknown');
-    return !approvedTakedowns[permKey];
+  // Infer missing roomTag from same-date siblings.
+  // Convention: same MMDDYY harvest date = same source room. If a batch was
+  // named without its R# suffix (e.g. "061826 KM3" instead of "061826 KM3 R7")
+  // but another batch on the same date DOES carry an R#, inherit it so the
+  // batch shares the same permKey/tdKey and follows the approval automatically.
+  // Only infer when EXACTLY ONE R# exists for that date — if two rooms happen
+  // to share a date, ambiguity forces manual attention (roomTag stays blank).
+  const dateToTags = {};
+  Object.values(seen).forEach(g => {
+    if (g.roomTag && g.harvestDate) {
+      if (!dateToTags[g.harvestDate]) dateToTags[g.harvestDate] = new Set();
+      dateToTags[g.harvestDate].add(g.roomTag);
+    }
   });
+  Object.values(seen).forEach(g => {
+    if (!g.roomTag && g.harvestDate && dateToTags[g.harvestDate] && dateToTags[g.harvestDate].size === 1) {
+      g.roomTag = Array.from(dateToTags[g.harvestDate])[0];
+      g._inferredRoomTag = true;
+    }
+  });
+
+  // Filter out permanently approved takedowns. A batch is identified by
+  // (roomTag, harvestDate) — that pair is unique across time and dry rooms
+  // (per Devon's spec — no duplicate date+room+strain), so an approval
+  // sticks regardless of which dry room the batch is physically sitting in.
+  // This fixes the "harvest reappears when moved to a different dry room"
+  // bug: batches routinely start in Dry Room 2 and move to Dry Room 1
+  // partway through drying.
+  return Object.values(seen).filter(b => {
+    const rt = b.roomTag || '';
+    const tagVariants = new Set([rt]);
+    if (!rt) tagVariants.add('Unknown');
+    if (b._inferredRoomTag) {
+      tagVariants.add('');
+      tagVariants.add('Unknown');
+    }
+    for (const tag of tagVariants) {
+      if (isTakedownApproved(tag, b.harvestDate, dryKey)) return false;
+    }
+    return true;
+  });
+}
+
+// Cross-dry-room approval lookup. Returns true if a batch identified by
+// (roomTag, harvestDate) has been approved anywhere.
+// Checks (in order):
+//   1. New any-dry-room key format: "R7|2026-09-01" — used by all approvals
+//      recorded from this ship forward.
+//   2. Legacy dry-room-prefixed keys: "Dry Room 1|R7|2026-09-01",
+//      "Dry Room 2|R7|2026-09-01", etc — used by approvals recorded before
+//      this ship. Matched by suffix so any prior dry room's approval counts.
+//   3. Local dryRooms.takedowns state for the CURRENT dry room only — safety
+//      net for edge cases where the cloud approval record has a mangled key
+//      (e.g. harvestDate='unknown' from the pre-inference era) but the local
+//      td record is intact.
+function isTakedownApproved(roomTag, harvestDate, currentDryKey){
+  const hd = harvestDate || 'unknown';
+  if (!roomTag && roomTag !== '') return false;
+  // 1. New format
+  const newKey = roomTag + '|' + hd;
+  if (approvedTakedowns[newKey]) return true;
+  // 2. Legacy dry-room-prefixed keys (any dry room)
+  const legacySuffix = '|' + roomTag + '|' + hd;
+  for (const key in approvedTakedowns) {
+    if (key.endsWith(legacySuffix)) return true;
+  }
+  // 3. Local safety net for the CURRENT dry room's takedown record
+  if (currentDryKey && dryRooms[currentDryKey] && dryRooms[currentDryKey].takedowns) {
+    const tdKey = currentDryKey + '|' + roomTag;
+    const td = dryRooms[currentDryKey].takedowns[tdKey];
+    if (td && td.approved === true) return true;
+  }
+  return false;
 }
 
 function renderSupportRooms(){
@@ -9336,10 +10410,20 @@ function renderSupportRooms(){
                 :`<div style="font-size:10px;color:var(--text3)">Waiting for a different team member to approve</div>`}
             </div>`;
           } else if(daysDrying!==null&&daysDrying>=TARGET_DAYS-2){
-            tdHtml=`<button onclick="event.stopPropagation();submitDryTakedown('${key}','${group.roomTag}')"
-              style="margin-top:6px;width:100%;font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">
-              Mark ready to take down
-            </button>`;
+            // Lead sees a single "Mark done" button that combines submit+approve.
+            // Non-lead sees the two-step "Mark ready" that requires a lead to
+            // approve afterward.
+            if(currentRole==='lead'){
+              tdHtml=`<button onclick="event.stopPropagation();markDryTakedownDone('${key}','${group.roomTag}')"
+                class="btn-primary" style="margin-top:6px;width:100%;font-size:11px;padding:5px 10px">
+                Mark done
+              </button>`;
+            } else {
+              tdHtml=`<button onclick="event.stopPropagation();submitDryTakedown('${key}','${group.roomTag}')"
+                style="margin-top:6px;width:100%;font-size:11px;padding:5px 10px;border-radius:var(--r);border:1px solid var(--border2);background:none;color:var(--text2);cursor:pointer">
+                Mark ready to take down
+              </button>`;
+            }
           }
 
           // Reorder arrows — leads only, skip if approved
@@ -10322,7 +11406,7 @@ async function openTableShotsModal(roomId, roomName, tableNum){
     // Server-side filter: only this room, only the last 49 hours of GL_History
     // (matches the 49h window pullIrrigationEvents uses, so events line up)
     const sinceISO = new Date(Date.now() - 49*60*60*1000).toISOString();
-    const evUrl = u+'?action=getSheet&sheet=GL_IrrigationEvents&room='+encodeURIComponent(roomId);
+    const evUrl = u+'?action=getSheet&sheet=GL_IrrigationEvents&room='+encodeURIComponent(roomId)+'&since='+encodeURIComponent(sinceISO);
     const hsUrl = u+'?action=getSheet&sheet=GL_History&room='+encodeURIComponent(roomId)
                 + '&since='+encodeURIComponent(sinceISO);
 
@@ -11121,6 +12205,7 @@ async function pushConfigToCloud(silent=false){
       dryRooms,
       alertThresholds,
       ...(_trimQueueDirty ? {trimQueue:L('wg_trim_queue',[])} : {}),
+      ...(_trimQueueDirty ? {deletedTrimIds:L('wg_trim_queue_deleted',[])} : {}),
       ...(_strainPerliteDirty ? {strainPerlite:L('wg_strain_perlite',{})} : {}),
       ...(_prerollThcDirty ? {prerollThc:L('wg_preroll_thc',{})} : {}),
       approvedTakedowns:L('wg_approved_takedowns',{}),
@@ -11264,16 +12349,41 @@ async function pullConfigFromCloud(silent=false){
       S('wg_supplies',supplies);
     }
 
-    // Trim queue — cloud is authoritative for order/priority/notes/roomId.
-    // Order persists across devices: the lead reorders → push to cloud → other
-    // devices pull → see the same order. New METRC-derived items not yet in cloud
-    // (just added on this device since last push) are kept and appended.
+    // Trim queue — cloud is authoritative for order/priority/notes/roomId,
+    // BUT local's archived state is sticky: once a lead archives an item
+    // locally, cloud can't un-archive it on the next pull. Without this,
+    // a routine pull that runs between the approve-click and the push landing
+    // on the server would clobber the local archived=true state and the item
+    // would reappear in the active queue with its data intact, waiting for
+    // approval again. Cloud archived=true is honored either way (once archived,
+    // stays archived).
     if(d.trimQueue&&Array.isArray(d.trimQueue)){
       const local=L('wg_trim_queue',[]);
+      const localById=new Map(local.map(t=>[t.id,t]));
+      const cloudMerged=d.trimQueue.map(cItem=>{
+        const lItem=localById.get(cItem.id);
+        if(lItem&&lItem.archived===true&&cItem.archived!==true){
+          return {...cItem, archived:true, archivedAt:lItem.archivedAt||cItem.archivedAt||new Date().toISOString()};
+        }
+        return cItem;
+      });
       const cloudIds=new Set(d.trimQueue.map(t=>t.id));
       const localOnly=local.filter(t=>!cloudIds.has(t.id));
-      trimQueue=[...d.trimQueue,...localOnly];
+      trimQueue=[...cloudMerged,...localOnly];
       S('wg_trim_queue',trimQueue);
+    }
+
+    // Trim queue deletion tombstones — union with cloud (any device that
+    // tombstoned an ID means it stays deleted for everyone), then filter
+    // the just-merged trimQueue so tombstoned IDs drop out even if some
+    // device's older push still had them present.
+    if(Array.isArray(d.deletedTrimIds)){
+      const merged=new Set([..._deletedTrimIds, ...d.deletedTrimIds]);
+      _deletedTrimIds=[...merged];
+      S('wg_trim_queue_deleted',_deletedTrimIds);
+      const before=trimQueue.length;
+      trimQueue=trimQueue.filter(t=>!merged.has(t.id));
+      if(trimQueue.length!==before) S('wg_trim_queue',trimQueue);
     }
 
     // Approved takedowns — append-only union. Once a takedown is approved on
@@ -11417,14 +12527,26 @@ async function pullConfigFromCloud(silent=false){
       }
     }
 
-    // Today logs — merge per day
+    // Today logs — merge per day, last-write-wins by entry id.
+    // Each entry has a stable id (creation Date.now()). An optional editedAt
+    // ISO string is bumped whenever a row is edited or soft-deleted. On conflict
+    // (same id on both sides) the side with the newer editedAt wins, so edits
+    // and deletes (deleted:true tombstones) propagate across devices — not just
+    // additions. Entries unique to either side are kept (preserves the old
+    // union behavior for brand-new rows).
     if(d.todayLogs){
-      Object.entries(d.todayLogs).forEach(([date,log])=>{
+      const _stamp = e => (e && e.editedAt) ? e.editedAt : '';
+      Object.entries(d.todayLogs).forEach(([date,cloudLog])=>{
         const localLog=L('wg_log_'+date,[]);
-        // Merge: add cloud entries not in local
-        const localIds=new Set(localLog.map(e=>e.id));
-        const merged=[...localLog,...log.filter(e=>!localIds.has(e.id))];
-        merged.sort((a,b)=>a.id-b.id);
+        const byId={};
+        localLog.forEach(e=>{ if(e&&e.id!=null) byId[e.id]=e; });
+        (cloudLog||[]).forEach(e=>{
+          if(!e||e.id==null) return;
+          const ex=byId[e.id];
+          if(!ex){ byId[e.id]=e; }                       // new from cloud
+          else if(_stamp(e) > _stamp(ex)){ byId[e.id]=e; } // cloud edit is newer
+        });
+        const merged=Object.values(byId).sort((a,b)=>a.id-b.id);
         S('wg_log_'+date,merged);
         if(date===dateToIso(TODAY)) todayLog=merged;
       });
@@ -13714,7 +14836,7 @@ function showBlueprint_status(msg){
 }
 
 
-// Maxx OS v1.5 phase thresholds — uses lead overrides if set, else defaults
+// Maxx OS v1.6 phase thresholds — uses lead overrides if set, else defaults
 // T2 = amber (inner band / log only), T1 = red (outer band / Slack after sustain)
 function getGuardrailsForPhase(phaseId){
   const p = MAXX_PHASES.find(x=>x.id===phaseId);
@@ -14124,6 +15246,38 @@ function prerollsPerPack(sizeLabel){
   return m?parseInt(m[1],10):1;
 }
 
+// fetch() with no timeout will hang forever on a stalled network / cold Apps
+// Script execution. AbortController gives us a hard ceiling. Returns the
+// Response; throws AbortError on timeout, other errors as usual. Default 30s.
+function fetchWithTimeout(url, opts, timeoutMs){
+  const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 30000;
+  const ctrl = new AbortController();
+  const timer = setTimeout(function(){ ctrl.abort(); }, ms);
+  const merged = Object.assign({}, opts || {}, {signal: ctrl.signal});
+  return fetch(url, merged).finally(function(){ clearTimeout(timer); });
+}
+
+// One-tap cache clear for the METRC_Items catalog. Backend also auto-clears
+// on sheet edits (via onEdit), but this button is here as an explicit escape
+// hatch for the packager after editing METRC_Items directly.
+async function clearMetrcItemsCache(){
+  const st = document.getElementById('order-status');
+  if(st){ st.textContent = 'Clearing METRC cache…'; st.style.color = 'var(--text3)'; }
+  try{
+    const res = await fetchWithTimeout(gsUrl+'?action=clearApprovedItemsCache&t='+Date.now(), null, 15000);
+    const json = await res.json();
+    if(json && json.ok){
+      if(st){ st.textContent = 'METRC cache cleared — reloading orders'; st.style.color = 'var(--green)'; }
+      await renderOrders();   // pulls fresh, will now hit a cold cache path
+      setTimeout(()=>{ if(st) st.textContent = ''; }, 3000);
+    } else {
+      if(st){ st.textContent = 'Cache clear failed'; st.style.color = 'var(--red)'; }
+    }
+  } catch(e){
+    if(st){ st.textContent = (e && e.name === 'AbortError') ? 'Cache clear timed out' : 'Cache clear error'; st.style.color = 'var(--red)'; }
+  }
+}
+
 async function renderOrders(){
   const list=document.getElementById('order-list');
   const st=document.getElementById('order-status');
@@ -14134,15 +15288,39 @@ async function renderOrders(){
   // Leads can see price; packagers cannot. Backend enforces this via action name.
   const action = (currentRole==='lead') ? 'getOrdersLead' : 'getOrders';
   try{
-    const res=await fetch(gsUrl+'?action='+action+'&t='+Date.now());
+    const res=await fetchWithTimeout(gsUrl+'?action='+action+'&t='+Date.now(), null, 30000);
     const json=await res.json();
     if(!json.ok){ list.innerHTML='<div style="color:var(--red);font-size:13px;padding:24px;text-align:center">'+esc(json.error||'Could not load orders')+'</div>'; if(st)st.textContent=''; return; }
     _orderState.orders=json.orders||[];
     if(st) st.textContent='Last refreshed: '+fmtTime();
     if(!_orderState.orders.length){ list.innerHTML='<div style="color:var(--text3);font-size:13px;padding:24px;text-align:center">No orders on the sheet yet.</div>'; return; }
-    list.innerHTML=_orderState.orders.map((o,i)=>orderCardHTML(o,i)).join('');
+    // Sort for display WITHOUT reindexing _orderState (modal uses original index).
+    // Groups: [0] IN PROGRESS (pinned to top until completed — someone is mid-package
+    //   and shouldn't have to scroll past untouched orders to finish) → [1] un-packaged
+    //   → [2] flagged (packaged, needs lead review) → [3] done (bottom).
+    // Within each group, keep original order-form order.
+    const rank=function(o){
+      const s=(o.status||'').toUpperCase();
+      if(s==='IN PROGRESS') return 0;   // actively being packaged — pin to very top
+      if(s.indexOf('PACKAGED')>=0) return 3; // done — bottom
+      if(s==='FLAGGED') return 2;       // packaged but needs lead review
+      return 1;                          // un-packaged — below in-progress
+    };
+    const ordered=_orderState.orders
+      .map((o,i)=>({o:o,i:i}))
+      .sort((a,b)=>{
+        const ra=rank(a.o), rb=rank(b.o);
+        if(ra!==rb) return ra-rb;
+        return a.i-b.i;
+      });
+    list.innerHTML=ordered.map(x=>orderCardHTML(x.o,x.i)).join('');
   }catch(e){
-    list.innerHTML='<div style="color:var(--red);font-size:13px;padding:24px;text-align:center">Load failed: '+esc(String(e))+'</div>';
+    // AbortError = our 30s timeout fired. Otherwise it's a real fetch/parse error.
+    var msg = (e && e.name === 'AbortError')
+      ? 'Loading timed out (30s). Network or backend may be busy.'
+      : 'Load failed: '+esc(String(e));
+    list.innerHTML='<div style="color:var(--red);font-size:13px;padding:24px;text-align:center">'+msg+
+      '<br><br><button onclick="renderOrders()" style="font-size:13px;padding:8px 18px;border-radius:var(--r);border:1px solid var(--border2);background:var(--bg2);color:var(--text);cursor:pointer">↻ Retry</button></div>';
     if(st) st.textContent='';
   }
 }
@@ -14154,10 +15332,18 @@ function orderCardHTML(o,i){
   // only compute a "need" figure when the ordered qty is a real number
   const qtyNum=Number(o.qtyOrdered);
   const need=(gpu!=null && o.qtyOrdered!=='' && !isNaN(qtyNum))?(qtyNum*gpu):null;
+  const inProgress=(o.status||'').toUpperCase()==='IN PROGRESS';
   let statusBadge='';
   if(flagged) statusBadge='<span class="tag" style="background:var(--red-dim);color:var(--red);font-size:10px">FLAGGED</span>';
   else if(done) statusBadge='<span class="tag" style="background:var(--green-dim);color:var(--green);font-size:10px">✓ Packaged</span>';
+  else if(inProgress) statusBadge='<span class="tag" style="background:var(--amber-dim,#fdf0d5);color:var(--amber);font-size:10px">In progress</span>';
   else statusBadge='<span class="tag" style="background:var(--bg4);color:var(--text3);font-size:10px">Not packaged</span>';
+  // in-progress checklist: which fields are filled so far
+  let progressLine='';
+  if(inProgress){
+    const mark=function(v){return (v!==''&&v!=null)?'✓':'—';};
+    progressLine='<div style="font-size:11px;color:var(--amber);margin-top:3px;font-family:var(--mono)">start '+mark(o.startWeight)+' · count '+mark(o.packaged)+' · final '+mark(o.endWeight)+'</div>';
+  }
 
   const varLine=(o.variance)?('<span style="font-family:var(--mono);font-size:11px;color:'+((String(o.variance).indexOf('-')>=0||Math.abs(parseFloat(o.variance))>30)?'var(--red)':'var(--text2)')+'">Var '+esc(String(o.variance))+'</span>'):'';
   const ambiguous=o.menuAmbiguous?'<div style="font-size:11px;color:var(--amber);margin-top:4px">⚠ RFID not matched to a single Weekly Menu package — lead must fix the RFID before packaging.</div>':'';
@@ -14165,17 +15351,21 @@ function orderCardHTML(o,i){
   const detail='RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+' · Qty '+esc(String(o.qtyOrdered))+(need!=null?(' · '+need+'g'):'');
   const pkgTag=o.wsNotes?('<span class="tag" style="background:var(--bg4);color:var(--text2);font-size:10px;font-family:var(--mono)">Pkg# '+esc(o.wsNotes)+'</span>'):'';
 
-  return '<div class="card" style="border-left:3px solid '+(flagged?'var(--red)':done?'var(--green)':'var(--border)')+'">'+
+  // fully-done (packaged, not flagged) cards are greyed and sink to the bottom
+  const dimStyle=(done&&!flagged)?'opacity:0.55;':'';
+  return '<div class="card" style="border-left:3px solid '+(flagged?'var(--red)':done?'var(--green)':'var(--border)')+';'+dimStyle+'">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
       '<div>'+
         '<div style="font-size:14px;font-weight:600;color:var(--text)">'+esc(o.strain)+' <span style="font-weight:400;color:var(--text3);font-size:12px">'+esc(o.brand)+'</span></div>'+
         '<div style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px">'+detail+'</div>'+
+        (o.approvalNum?('<div style="font-size:11px;color:var(--text2);margin-top:2px">METRC: <span style="font-family:var(--mono)">'+esc(o.approvalNum)+'</span></div>'):(o.itemName&&o.itemName.indexOf('VERIFY')>=0?'<div style="font-size:11px;color:var(--amber);margin-top:2px">METRC item needs verify</div>':''))+
+        progressLine+
         ambiguous+
       '</div>'+
       '<div style="text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+statusBadge+pkgTag+varLine+'</div>'+
     '</div>'+
     '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+
-      '<button class="btn-primary" style="font-size:12px;padding:7px 14px" '+(o.menuAmbiguous?'disabled style="opacity:.5"':'')+' onclick="openPkgModal('+i+')">'+(done?'Edit packaging':'Package this')+'</button>'+
+      '<button class="btn-primary" style="font-size:12px;padding:7px 14px" '+(o.menuAmbiguous?'disabled style="opacity:.5"':'')+' onclick="openPkgModal('+i+')">'+(done?'Edit packaging':inProgress?'Continue packaging':'Package this')+'</button>'+
     '</div>'+
   '</div>';
 }
@@ -14195,17 +15385,29 @@ function openPkgModal(i){
   document.getElementById('pkg-weight-end').style.display=preroll?'none':'block';
   // qty label + placeholder adapt to preroll vs weight
   if(preroll){
-    document.getElementById('pkg-qty-label').innerHTML='# packs packaged <span style="color:var(--text3);font-weight:400">(packs, not singles)</span>';
+    document.getElementById('pkg-qty-label').innerHTML='# packs packaged';
     document.getElementById('pkg-qty').placeholder='e.g. 50 packs';
     document.getElementById('pkg-modal-meta').innerHTML=
-      '<b>'+esc(o.strain)+'</b> '+esc(o.brand)+'<br>RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+'<br>Ordered: <b>'+esc(String(o.qtyOrdered))+'</b> packs · 1 pack = '+o._perPack+' units'+
-      (o.menuGrams!=null?('<br>Menu has <b>'+Number(o.menuGrams).toFixed(0)+'</b> units available'):'');
+      '<b>'+esc(o.strain)+'</b> '+esc(o.brand)+' · '+esc(o.size)+'<br>'+
+      '<div style="display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px;font-family:var(--mono);font-size:11px;margin-top:6px">'+
+        '<span style="color:var(--text3)">Source RFID:</span><span>'+esc(o.rfid||'—')+'</span>'+
+        '<span style="color:var(--text3)">New pkg#:</span><span>'+(o.wsNotes?esc(o.wsNotes):'<span style="color:var(--amber)">not assigned</span>')+'</span>'+
+        '<span style="color:var(--text3)">METRC approval:</span><span>'+(o.approvalNum?esc(o.approvalNum):(o.itemName&&o.itemName.indexOf('VERIFY')>=0?'<span style="color:var(--amber)">needs verify</span>':'<span style="color:var(--text3)">—</span>'))+'</span>'+
+      '</div>'+
+      '<div style="margin-top:6px">Ordered: <b>'+esc(String(o.qtyOrdered))+'</b> packs'+
+      (o.menuGrams!=null?(' · Menu has <b>'+Number(o.menuGrams).toFixed(0)+'</b> packs available'):'')+'</div>';
   } else {
     document.getElementById('pkg-qty-label').innerHTML='# actually packaged <span style="color:var(--text3);font-weight:400">(type the real count — may differ from the order)</span>';
     document.getElementById('pkg-qty').placeholder='e.g. 300';
     document.getElementById('pkg-modal-meta').innerHTML=
-      '<b>'+esc(o.strain)+'</b> '+esc(o.brand)+'<br>RFID '+esc(o.rfid||'—')+' · '+esc(o.size)+'<br>Ordered: <b>'+esc(String(o.qtyOrdered))+'</b>'+
-      (gpu!=null?(' · 1 unit = '+gpu+'g'):' · <span style="color:var(--amber)">unknown unit size</span>');
+      '<b>'+esc(o.strain)+'</b> '+esc(o.brand)+' · '+esc(o.size)+'<br>'+
+      '<div style="display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px;font-family:var(--mono);font-size:11px;margin-top:6px">'+
+        '<span style="color:var(--text3)">Source RFID:</span><span>'+esc(o.rfid||'—')+'</span>'+
+        '<span style="color:var(--text3)">New pkg#:</span><span>'+(o.wsNotes?esc(o.wsNotes):'<span style="color:var(--amber)">not assigned</span>')+'</span>'+
+        '<span style="color:var(--text3)">METRC approval:</span><span>'+(o.approvalNum?esc(o.approvalNum):(o.itemName&&o.itemName.indexOf('VERIFY')>=0?'<span style="color:var(--amber)">needs verify</span>':'<span style="color:var(--text3)">—</span>'))+'</span>'+
+      '</div>'+
+      '<div style="margin-top:6px">Ordered: <b>'+esc(String(o.qtyOrdered))+'</b>'+
+      (gpu!=null?(' · 1 unit = '+gpu+'g'):' · <span style="color:var(--amber)">unknown unit size</span>')+'</div>';
   }
   // prefill if re-editing
   document.getElementById('pkg-start').value=o.startWeight||'';
@@ -14214,8 +15416,14 @@ function openPkgModal(i){
   document.getElementById('pkg-verify').value=o.verifiedBy||'';
   document.getElementById('pkg-label').value=o.labelVerifiedBy||'';
   document.getElementById('pkg-override').checked=false;
-  document.getElementById('pkg-qty').value='';
+  // Restore the previously-entered packaged count so re-edits show the full
+  // picture (start weight, end weight, packages packed) — not just weights.
+  document.getElementById('pkg-qty').value=o.packaged||'';
   document.getElementById('pkg-packaged-line').textContent='';
+  // smalls field: buds-type orders only, optional, reset blank
+  const isBuds=String(o.type||'').toLowerCase().indexOf('bud')>=0;
+  document.getElementById('pkg-smalls-row').style.display=(isBuds&&!preroll)?'block':'none';
+  document.getElementById('pkg-smalls').value='';
   pkgCheckStart(); pkgCheckFinal(); pkgUpdateSubmitState();
   document.getElementById('pkg-modal-bg').classList.add('open');
 }
@@ -14227,12 +15435,13 @@ function pkgCheckStart(){
   const flagEl=document.getElementById('pkg-start-flag');
   const box=document.getElementById('pkg-override-box');
   if(o._preroll){ flagEl.style.display='none'; return; } // prerolls have no weight start-check
+  const base=(o.baseline!=null?o.baseline:o.menuGrams); // original if packaged before, else current menu
   const start=parseFloat(document.getElementById('pkg-start').value);
-  if(isNaN(start)||o.menuGrams==null){ flagEl.style.display='none'; box.style.display='none'; pkgUpdateSubmitState(); return; }
-  const sv=start-Number(o.menuGrams);
+  if(isNaN(start)||base==null){ flagEl.style.display='none'; box.style.display='none'; pkgUpdateSubmitState(); return; }
+  const sv=start-Number(base);
   const off=Math.abs(sv)>30;
   flagEl.style.display='block';
-  flagEl.innerHTML='Menu has '+Number(o.menuGrams).toFixed(0)+'g for this package · start variance <b style="font-family:var(--mono)">'+(sv>=0?'+':'')+sv.toFixed(0)+'g</b>'+(off?' <span style="color:var(--red)">— over 30g, verify</span>':' <span style="color:var(--green)">— OK</span>');
+  flagEl.innerHTML=(o.wasPackaged?'Original start ':'Menu has ')+Number(base).toFixed(0)+'g for this package · start variance <b style="font-family:var(--mono)">'+(sv>=0?'+':'')+sv.toFixed(0)+'g</b>'+(off?' <span style="color:var(--red)">— over 30g, verify</span>':' <span style="color:var(--green)">— OK</span>');
   flagEl.style.color=off?'var(--red)':'var(--text2)';
   box.style.display=off?'block':'none';
   pkgUpdateSubmitState();
@@ -14250,10 +15459,11 @@ function pkgCheckFinal(){
     const units=(!isNaN(qty))?qty*o._perPack:NaN;
     pl.textContent=(!isNaN(units))?(qty+' packs × '+o._perPack+' = '+units+' units'):'';
     line.textContent='';
-    if(!isNaN(units)&&o.menuGrams!=null){
-      const remaining=Number(o.menuGrams)-units;
+    const baseP=(o.baseline!=null?o.baseline:o.menuGrams);
+    if(!isNaN(units)&&baseP!=null){
+      const remaining=Number(baseP)-units;
       const over=remaining<0;
-      line.innerHTML='Menu units will go '+Number(o.menuGrams).toFixed(0)+' − '+units+' = <b style="font-family:var(--mono);color:'+(over?'var(--red)':'var(--green)')+'">'+remaining.toFixed(0)+' units</b>'+(over?'<br><span style="color:var(--red);font-size:11px">⚠ More than the menu shows — needs lead override</span>':'');
+      line.innerHTML=(o.wasPackaged?'From original ':'Menu units ')+Number(baseP).toFixed(0)+' − '+units+' = <b style="font-family:var(--mono);color:'+(over?'var(--red)':'var(--green)')+'">'+remaining.toFixed(0)+' units</b>'+(over?'<br><span style="color:var(--red);font-size:11px">⚠ More than available — needs lead override</span>':'');
     }
     return;
   }
@@ -14263,8 +15473,9 @@ function pkgCheckFinal(){
   const packagedG=(gpu!=null&&!isNaN(qty))?qty*gpu:NaN;
   pl.textContent=(!isNaN(packagedG))?(qty+' × '+gpu+'g = '+packagedG.toFixed(1)+'g packaged'):'';
   const end=parseFloat(document.getElementById('pkg-end').value);
-  if(isNaN(end)||o.menuGrams==null||isNaN(packagedG)){ line.textContent=''; return; }
-  const expectedEnd=Number(o.menuGrams)-packagedG;
+  const baseB=(o.baseline!=null?o.baseline:o.menuGrams);
+  if(isNaN(end)||baseB==null||isNaN(packagedG)){ line.textContent=''; return; }
+  const expectedEnd=Number(baseB)-packagedG;
   const fv=end-expectedEnd;
   line.innerHTML='Expected leftover '+expectedEnd.toFixed(0)+'g · final variance <b style="font-family:var(--mono);color:'+(Math.abs(fv)>100?'var(--red)':Math.abs(fv)>30?'var(--amber)':'var(--green)')+'">'+(fv>=0?'+':'')+fv.toFixed(0)+'g</b><br><span style="color:var(--text3);font-size:11px">Menu weight will update to '+end.toFixed(0)+'g</span>';
 }
@@ -14279,12 +15490,12 @@ function pkgUpdateSubmitState(){
     // flag when packaged units exceed menu units available
     const qty=parseFloat(document.getElementById('pkg-qty').value);
     const units=(!isNaN(qty))?qty*o._perPack:NaN;
-    off=(!isNaN(units)&&o.menuGrams!=null&&units>Number(o.menuGrams));
+    off=(!isNaN(units)&&(o.baseline!=null?o.baseline:o.menuGrams)!=null&&units>Number(o.baseline!=null?o.baseline:o.menuGrams));
     if(box) box.style.display=off?'block':'none';
     if(off&&overTxt) overTxt.textContent='Packaging more units than the Weekly Menu shows available. This shouldn\'t happen. Tick to confirm the count is correct — this package will be highlighted on the menu for lead review.';
   } else {
     const start=parseFloat(document.getElementById('pkg-start').value);
-    off=(!isNaN(start)&&o.menuGrams!=null&&Math.abs(start-Number(o.menuGrams))>30);
+    off=(!isNaN(start)&&(o.baseline!=null?o.baseline:o.menuGrams)!=null&&Math.abs(start-Number(o.baseline!=null?o.baseline:o.menuGrams))>30);
     if(off&&overTxt) overTxt.textContent='Starting weight is off by more than 30g. Re-check the jar and scale. Tick to confirm the weight you entered is correct — this package will be highlighted on the Weekly Menu for lead review.';
   }
   const overrideChecked=document.getElementById('pkg-override').checked;
@@ -14301,18 +15512,18 @@ async function confirmPackaging(){
   let payload;
 
   if(o._preroll){
-    // PREROLL: qty is packs. units deduct from menu. No weighing.
+    // PREROLL: qty is packs. Menu row is the pre-packaged SKU; menu units col
+    // holds pack count. Deduct qty directly. No weighing, no units math.
     if(isNaN(qty)||qty<0){ alert('Enter the number of packs packaged.'); return; }
-    const units=qty*o._perPack;
-    const over=(o.menuGrams!=null&&units>Number(o.menuGrams));
-    if(over&&!overrode){ alert('Packaging more units than the menu shows — confirm the override box first.'); return; }
+    const _baseO=(o.baseline!=null?o.baseline:o.menuGrams);
+    const over=(_baseO!=null&&qty>Number(_baseO));
+    if(over&&!overrode){ alert('Packaging more packs than the menu shows — confirm the override box first.'); return; }
     payload={
       action:'submitPackaging',
       rowIndex:o.rowIndex,
       rfid:o.rfid,
       isPreroll:true,
-      actualQty:qty,             // packs
-      unitsPackaged:units,       // singles deducted from menu
+      actualQty:qty,             // packs — menu deducts by this directly
       perPack:o._perPack,
       overrode:over&&overrode,
       countBy:document.getElementById('pkg-count').value.trim(),
@@ -14327,7 +15538,8 @@ async function confirmPackaging(){
     if(isNaN(start)||isNaN(end)){ alert('Enter both starting and ending weight.'); return; }
     if(isNaN(qty)||qty<0){ alert('Enter the number actually packaged.'); return; }
     const packagedG=(gpu!=null)?qty*gpu:0;
-    const off=(o.menuGrams!=null&&Math.abs(start-Number(o.menuGrams))>30);
+    const _baseB2=(o.baseline!=null?o.baseline:o.menuGrams);
+    const off=(_baseB2!=null&&Math.abs(start-Number(_baseB2))>30);
     if(off&&!overrode){ alert('Starting weight is off by more than 30g — confirm the override box first.'); return; }
     payload={
       action:'submitPackaging',
@@ -14337,6 +15549,7 @@ async function confirmPackaging(){
       endWeight:end,
       actualQty:qty,
       packagedG:packagedG,
+      smallsG:(function(){var s=parseFloat(document.getElementById('pkg-smalls').value);return isNaN(s)?null:s;})(),
       overrode:off&&overrode,
       countBy:document.getElementById('pkg-count').value.trim(),
       verifiedBy:document.getElementById('pkg-verify').value.trim(),
@@ -14347,12 +15560,13 @@ async function confirmPackaging(){
   btn.disabled=true; btn.textContent='Saving…';
   try{
     // text/plain avoids CORS preflight AND lets us read the response (unlike no-cors)
-    const res=await fetch(gsUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});
+    // 60s timeout — submit does lots of writes (Order Form, Weekly Menu, METRC_Export upsert).
+    const res=await fetchWithTimeout(gsUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)},60000);
     const json=await res.json();
-    if(!json.ok){ alert('Save failed: '+(json.error||'unknown')); btn.disabled=false; btn.textContent='Submit'; return; }
+    if(!json.ok){ alert('Save failed: '+(json.error||'unknown')); btn.disabled=false; btn.textContent='Complete packaging'; return; }
     let msg='Saved. ';
     if(json.isPreroll){
-      if(json.menuUpdated) msg+='Weekly Menu units updated to '+json.newUnits+'. ';
+      if(json.menuUpdated) msg+='Weekly Menu updated to '+json.newUnits+' packs. ';
       if(json.overUnits) msg+='Packaged more than available — package highlighted on the menu for lead review. ';
     } else {
       if(json.menuUpdated) msg+='Weekly Menu updated to '+(json.newGrams!=null?json.newGrams:'')+'g. ';
@@ -14361,11 +15575,47 @@ async function confirmPackaging(){
     }
     if(json.menuAmbiguous) msg+=' NOTE: RFID did not match a single menu package, so the menu was NOT updated — tell a lead.';
     closePkgModal();
-    btn.textContent='Submit';
+    btn.textContent='Complete packaging';
     renderOrders();
     setTimeout(()=>alert(msg),100);
   }catch(e){
-    alert('Save failed: '+e); btn.disabled=false; btn.textContent='Submit';
+    var emsg = (e && e.name === 'AbortError')
+      ? 'Save timed out (60s). Check the sheet — the order may have saved anyway. If not, tap Complete packaging again.'
+      : 'Save failed: '+e;
+    alert(emsg); btn.disabled=false; btn.textContent='Complete packaging';
+  }
+}
+
+// Save partial progress: writes whatever's filled, leaves order IN PROGRESS,
+// does NOT touch the Weekly Menu. Buds-focused (prerolls are one-shot).
+async function savePackagingProgress(){
+  const o=_orderState.orders[_orderState.current]; if(!o) return;
+  const payload={
+    action:'savePackagingProgress',
+    rowIndex:o.rowIndex,
+    rfid:o.rfid,
+    startWeight:document.getElementById('pkg-start').value.trim(),
+    endWeight:document.getElementById('pkg-end').value.trim(),
+    actualQty:document.getElementById('pkg-qty').value.trim(),
+    countBy:document.getElementById('pkg-count').value.trim(),
+    verifiedBy:document.getElementById('pkg-verify').value.trim(),
+    labelVerifiedBy:document.getElementById('pkg-label').value.trim(),
+  };
+  const sbtn=document.getElementById('pkg-save-btn');
+  sbtn.disabled=true; const sOld=sbtn.textContent; sbtn.textContent='Saving…';
+  try{
+    const res=await fetchWithTimeout(gsUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)},30000);
+    const json=await res.json();
+    if(!json.ok){ alert('Save failed: '+(json.error||'unknown')); sbtn.disabled=false; sbtn.textContent=sOld; return; }
+    closePkgModal();
+    sbtn.textContent=sOld;
+    renderOrders();
+    setTimeout(()=>alert('Progress saved. This order is now In progress — anyone can open it to finish.'),100);
+  }catch(e){
+    var smsg = (e && e.name === 'AbortError')
+      ? 'Save timed out (30s). Check the sheet — progress may have saved anyway.'
+      : 'Save failed: '+e;
+    alert(smsg); sbtn.disabled=false; sbtn.textContent=sOld;
   }
 }
 
